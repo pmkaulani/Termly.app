@@ -3,6 +3,15 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 
 serve(async (req) => {
   try {
+    const url = new URL(req.url);
+    const callbackToken = url.searchParams.get('token');
+    const expectedToken = Deno.env.get('MPESA_CALLBACK_TOKEN');
+
+    if (!expectedToken || callbackToken !== expectedToken) {
+      console.error('Unauthorized callback attempt. Invalid or missing token.');
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
+    }
+
     const body = await req.json();
     const stkCallback = body?.Body?.stkCallback;
 

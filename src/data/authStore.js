@@ -1,5 +1,6 @@
 import { supabase } from '../lib/supabase';
 import { _currentSchoolId, mutationGuard, getSchoolProfileBySchoolId, checkIsSubscriptionActive, checkFeatureAccess, logPlatformActivity, hasFeature, getCurrentSchoolId } from './coreStore';
+import { generateTempPassword } from '../utils/securityUtils';
 
 // ============================================================================
 // AUTH MODULE: API LAYER for Login & Register
@@ -111,7 +112,7 @@ export async function addUser(user) {
     new_email: user.email,
     new_name: user.name,
     new_role: user.role,
-    new_password: user.password || 'password123',
+    new_password: user.password || generateTempPassword(),
     target_school_id: getCurrentSchoolId()
   });
 
@@ -319,12 +320,13 @@ export async function validateParentLogin(schoolSearch, admNo, phone, schoolId =
   };
 }
 
-export async function resetUserPassword(authUserId, newPassword = 'password123') {
+export async function resetUserPassword(authUserId, newPassword = null) {
+  const passwordToSet = newPassword || generateTempPassword();
   // In a real app, you'd use a server-side route or a SECURITY DEFINER RPC.
   // For this demo/MVP, we'll try to use the RPC if it exists, or just log it.
   const { error } = await supabase.rpc('platform_reset_password', { 
     target_user_id: authUserId, 
-    new_password: newPassword 
+    new_password: passwordToSet 
   });
   if (error) {
     console.error("Password reset RPC failed. Ensure platform_reset_password RPC exists.", error);

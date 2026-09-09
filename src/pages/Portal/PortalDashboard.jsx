@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   LogoutIcon, BookIcon, CheckIcon, 
   MessageIcon, ActivityIcon, 
@@ -9,7 +9,7 @@ import {
 import { Helmet } from 'react-helmet-async';
 import { getAssignments, getStudentSubmissions } from '../../data/offlineStore';
 import { getStudentExamResults, getGradeForScore, getStudentProfile, getAnnouncements, getSubjectDetails, getStudentCBCProgress } from '../../data/academicsStore';
-import { generateReportCard, downloadReportCardPDF } from '../../utils/reportCard';
+import { generateReportCard, downloadReportCardPDF, downloadCBCReportCardPDF } from '../../utils/reportCard';
 import { printReceipt, printFeeStatement } from '../../utils/receiptPrint';
 import { getStudentBooks } from '../../data/libraryStore';
 import { getFees } from '../../data/financeStore';
@@ -126,7 +126,7 @@ export default function PortalDashboard({ user, onLogout }) {
   }, []);
 
   // Helper to reload fee data
-  const refreshFees = async () => {
+  const refreshFees = useCallback(async () => {
     try {
       const activeId = localUser?.id || user.id;
       const myFee = await getFees(activeId);
@@ -141,10 +141,10 @@ export default function PortalDashboard({ user, onLogout }) {
         setLastSync(new Date());
       }
     } catch (e) { console.warn('Fee refresh error:', e); }
-  };
+  }, [localUser?.id, user.id]);
 
   // Helper to reload exam results
-  const refreshResults = async () => {
+  const refreshResults = useCallback(async () => {
     try {
       const activeId = localUser?.id || user.id;
       const activeClass = localUser?.class || user.class;
@@ -157,7 +157,7 @@ export default function PortalDashboard({ user, onLogout }) {
       }
       setLastSync(new Date());
     } catch (e) { console.warn('Results refresh error:', e); }
-  };
+  }, [localUser?.id, user.id, localUser?.class, user.class, schoolProfile]);
 
   useEffect(() => {
     async function init() {
@@ -229,21 +229,23 @@ export default function PortalDashboard({ user, onLogout }) {
     init();
 
     // Real-time subscriptions for live updates
-    const schoolId = user.school_id || user.schoolId;
-    const unsubFees = subscribe(`portal_fees_${user.id}`, 'fee_payments', refreshFees, { column: 'school_id', value: schoolId });
-    const unsubResults = subscribe(`portal_results_${user.id}`, 'exam_results', refreshResults, { column: 'student_id', value: user.id });
-    const unsubAnnouncements = subscribe(`portal_notices_${schoolId}`, 'announcements', async () => {
-      const fresh = await getAnnouncements(schoolId).catch(() => []);
+    const activeId = localUser?.id || user.id;
+    const activeSchoolId = localUser?.school_id || user.school_id || user.schoolId;
+    
+    const unsubFees = subscribe(`portal_fees_${activeId}`, 'fee_payments', refreshFees, { column: 'school_id', value: activeSchoolId });
+    const unsubResults = subscribe(`portal_results_${activeId}`, 'exam_results', refreshResults, { column: 'student_id', value: activeId });
+    const unsubAnnouncements = subscribe(`portal_notices_${activeSchoolId}`, 'announcements', async () => {
+      const fresh = await getAnnouncements(activeSchoolId).catch(() => []);
       setNotices(fresh);
       setLastSync(new Date());
-    }, { column: 'school_id', value: schoolId });
+    }, { column: 'school_id', value: activeSchoolId });
 
     return () => {
       unsubFees();
       unsubResults();
       unsubAnnouncements();
     };
-  }, [user, localUser?.id]);
+  }, [user, localUser?.id, localUser?.school_id, refreshFees, refreshResults]);
 
   const [mpesaError, setMpesaError] = useState('');
 
@@ -771,6 +773,15 @@ export default function PortalDashboard({ user, onLogout }) {
                           </div>
                         );
                       })}
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+                        <button
+                          onClick={() => downloadCBCReportCardPDF(localUser, cbcProgress, {}, schoolProfile)}
+                          style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 20px', background: '#4f46e5', color: '#fff', borderRadius: 12, fontWeight: 700, border: 'none', cursor: 'pointer', boxShadow: '0 4px 12px rgba(79, 70, 229, 0.25)' }}
+                        >
+                          <DownloadIcon size={16} />
+                          Download Official CBC Report
+                        </button>
+                      </div>
                     </div>
                   )}
                 </section>

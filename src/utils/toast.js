@@ -62,10 +62,16 @@ function createToast(message, type = 'info', duration = 4000) {
     transition: 'opacity 0.3s, transform 0.3s',
   });
 
-  el.innerHTML = `
-    <span style="font-size: 1.1rem; font-weight: 800;">${config.icon}</span>
-    <span style="flex: 1;">${message}</span>
-  `;
+    const iconSpan = document.createElement('span');
+    iconSpan.style.cssText = "font-size: 1.2rem;";
+    iconSpan.textContent = config.icon;
+
+    const textSpan = document.createElement('span');
+    textSpan.style.cssText = "font-weight: 500; font-size: 0.95rem;";
+    textSpan.textContent = message;
+
+    el.appendChild(iconSpan);
+    el.appendChild(textSpan);
 
   el.onclick = () => dismissToast(el);
   container.appendChild(el);

@@ -20,6 +20,7 @@ import { getFees } from './financeStore';
 import { withRetry } from '../utils/resilience';
 import { getUserByAuthId } from './authStore';
 import { CBC_STRUCTURE, getLevelForGrade, getSubjectsForGrade } from './seedData';
+import { calculateStudentSummary, assignCompetitionRanks, parseMarkValue } from '../utils/assessmentCalculations';
 
 export async function getPeriods() {
   if (!_currentSchoolId) return [];
@@ -105,13 +106,14 @@ export async function setActivePeriod(periodId) {
   mutationGuard('setActivePeriod');
   if (!_currentSchoolId) return;
   // Update DB
-  await supabase.from('academic_periods')
+  const { error: deactError } = await supabase.from('academic_periods')
     .update({ is_active: false })
     .eq('school_id', _currentSchoolId);
+  if (deactError) throw deactError;
   
   const { error } = await supabase.from('academic_periods')
     .update({ is_active: true })
-    .eq('id', periodId);
+    .eq('id', periodId).eq('school_id', _currentSchoolId);
   if (error) throw error;
   
   setCurrentPeriodId(periodId);
@@ -151,40 +153,61 @@ export async function getMarks(examType = _currentExamType) {
     const marks = {};
     (data || []).forEach(row => {
       if (!marks[row.student_id]) marks[row.student_id] = {};
-      marks[row.student_id][row.subject] = row.mark;
+      // Map sentinels back to special codes
+      if (row.mark === -1) marks[row.student_id][row.subject] = 'ABS';
+      else if (row.mark === -2) marks[row.student_id][row.subject] = 'MISSING';
+      else if (row.mark === -3) marks[row.student_id][row.subject] = 'EXEMPT';
+      else marks[row.student_id][row.subject] = row.mark;
     });
     return marks;
   });
 }
 
-export async function setStudentAllMarks(studentId, subjectMarks, examType = _currentExamType) {
+export async function setStudentAllMarks(studentId, subjectMarks, examType = _currentExamType, reason = '') {
   mutationGuard('setStudentAllMarks');
   const userRecord = await getUserByAuthId(_currentAuthUser?.id);
   const creatorId = userRecord?.id || _currentUserId;
   
-  const rows = Object.entries(subjectMarks).map(([subject, mark]) => ({
-    school_id: _currentSchoolId,
-    student_id: studentId,
-    subject,
-    mark: Math.max(0, Math.min(100, Number(mark) || 0)),
-    period_id: _currentPeriodId,
-    exam_type: examType,
-    created_by: creatorId
-  }));
+  const rows = Object.entries(subjectMarks).map(([subject, rawMark]) => {
+    let dbMark = null;
+    if (rawMark === 'ABS') dbMark = -1;
+    else if (rawMark === 'MISSING') dbMark = -2;
+    else if (rawMark === 'EXEMPT') dbMark = -3;
+    else if (rawMark !== null && rawMark !== undefined && rawMark !== '') {
+      const num = Number(rawMark);
+      dbMark = isNaN(num) ? null : num;
+    }
+
+    return {
+      school_id: _currentSchoolId,
+      student_id: studentId,
+      subject,
+      mark: dbMark,
+      period_id: _currentPeriodId,
+      exam_type: examType,
+      created_by: creatorId
+    };
+  });
 
   if (rows.length === 0) return;
-  
-  console.log(`[STORE] Saving ${rows.length} marks for student ${studentId} (Exam: ${examType}, CreatedBy: ${creatorId})`);
-  
+
   const { error } = await supabase
     .from('marks')
     .upsert(rows, { onConflict: 'school_id,student_id,subject,period_id,exam_type' });
   
   if (error) {
-    console.error('[STORE] Failed to save marks. Payload:', { rows: rows.slice(0, 3), total: rows.length });
-    console.error('[STORE] Supabase Error:', error);
+    console.error('[STORE] Failed to save marks:', error);
     throw error;
   }
+
+  // Audit log for traceability
+  logAuditEvent('marks_updated', 'marks', studentId, {
+    examType,
+    subjectCount: rows.length,
+    reason
+  });
+
+  invalidateCache(`marks_${_currentSchoolId}_${_currentPeriodId}_${examType}`);
 }
 
 export async function getClassResults(className, examType = _currentExamType) {
@@ -194,19 +217,12 @@ export async function getClassResults(className, examType = _currentExamType) {
   const subjects = getSubjectsForGrade(className, profile);
 
   const results = students.map(s => {
-    const m = marks[s.id] || {};
-    const enrolledSubjects = (s.subjects && s.subjects.length > 0) ? s.subjects : subjects;
-    const relevantMarks = enrolledSubjects.map(sub => m[sub] || 0);
-    const total = relevantMarks.reduce((sum, v) => sum + v, 0);
-    const average = enrolledSubjects.length > 0 ? (total / enrolledSubjects.length).toFixed(1) : 0;
-    const cleanMarks = {};
-    enrolledSubjects.forEach(sub => { cleanMarks[sub] = m[sub] || 0; });
-    return { ...s, marks: cleanMarks, total, average: Number(average), level: getLevelForGrade(className), enrolledSubjects };
+    const sMarks = marks[s.id] || {};
+    return calculateStudentSummary(s, sMarks, subjects, {}, profile);
   });
 
-  results.sort((a, b) => b.total - a.total);
-  results.forEach((r, i) => { r.rank = i + 1; });
-  return results;
+  // Assign standard competition ranks with ties (1, 2, 2, 4)
+  return assignCompetitionRanks(results, 'total', 'average');
 }
 
 export async function getSubjectRankings(className, examType = _currentExamType) {
@@ -215,15 +231,24 @@ export async function getSubjectRankings(className, examType = _currentExamType)
   const profile = await getSchoolProfile();
   const subjects = getSubjectsForGrade(className, profile);
   const rankings = {};
+
   subjects.forEach(sub => {
     const subResults = students
       .filter(s => !s.subjects || s.subjects.length === 0 || s.subjects.includes(sub))
-      .map(s => ({
-        ...s, mark: (marks[s.id] || {})[sub] || 0,
-      })).sort((a, b) => b.mark - a.mark);
-    subResults.forEach((r, i) => { r.rank = i + 1; });
-  rankings[sub] = subResults;
+      .map(s => {
+        const raw = (marks[s.id] || {})[sub];
+        const num = typeof raw === 'number' ? raw : (raw === 'ABS' || raw === 'MISSING' ? 0 : null);
+        return {
+          ...s,
+          mark: raw !== undefined && raw !== null ? raw : '—',
+          score: num !== null ? num : -1
+        };
+      });
+
+    // Standard competition ranking for subject scores
+    rankings[sub] = assignCompetitionRanks(subResults, 'score', 'name');
   });
+
   return rankings;
 }
 
@@ -421,9 +446,10 @@ async function migrateLegacyExams(examsList) {
   }
 
   // Clear legacy field to prevent re-migration
-  await supabase
+  const { error: profileErr } = await supabase
     .from('school_profiles')
     .upsert({ school_id: _currentSchoolId, custom_exams: [] }, { onConflict: 'school_id' });
+  if (profileErr) throw profileErr;
 }
 
 /**
@@ -463,7 +489,8 @@ export async function deleteExam(examId) {
   const { error } = await supabase
     .from('exams')
     .delete()
-    .eq('id', examId);
+    .eq('id', examId)
+    .eq('school_id', _currentSchoolId);
   
   if (error) throw error;
   invalidateCache(`exams_${_currentSchoolId}_${_currentPeriodId}`);
@@ -475,31 +502,52 @@ export async function updateExam(examId, updates) {
   const { error } = await supabase
     .from('exams')
     .update(updates)
-    .eq('id', examId);
+    .eq('id', examId)
+    .eq('school_id', _currentSchoolId);
   
   if (error) throw error;
   invalidateCache(`exams_${_currentSchoolId}_${_currentPeriodId}`);
 }
 
-/**
- * Updates the status of an exam (e.g., 'published', 'draft', 'closed')
- */
-export async function updateExamStatus(examId, newStatus) {
+export async function updateExamStatus(examId, newStatus, reason = '') {
+  const { data: current } = await supabase
+    .from('exams')
+    .select('status, name')
+    .eq('id', examId)
+    .maybeSingle();
+
   const { error } = await supabase
     .from('exams')
     .update({ status: newStatus })
-    .eq('id', examId);
+    .eq('id', examId)
+    .eq('school_id', _currentSchoolId);
   if (error) throw error;
+
+  await logAuditEvent('assessment_status_change', 'exams', examId, {
+    examName: current?.name,
+    oldStatus: current?.status,
+    newStatus,
+    reason
+  });
   
   invalidateCache(`exams_${_currentSchoolId}_${_currentPeriodId}`);
   return true;
+}
+
+export async function finalizeExam(examId) {
+  return await updateExamStatus(examId, 'finalized', 'Assessment results finalized and locked.');
+}
+
+export async function unlockExam(examId, reason = 'Administrator reopened marks entry') {
+  return await updateExamStatus(examId, 'open', reason);
 }
 
 export async function releaseExamToParents(examId, isReleased = true) {
   const { error } = await supabase
     .from('exams')
     .update({ released_to_parents: isReleased })
-    .eq('id', examId);
+    .eq('id', examId)
+    .eq('school_id', _currentSchoolId);
   if (error) throw error;
   
   invalidateCache(`exams_${_currentSchoolId}_${_currentPeriodId}`);
@@ -555,7 +603,8 @@ export async function getExamPapers(examId) {
   const { data, error } = await supabase
     .from('exam_papers')
     .select('*, tt_subjects(name), classes(name, stream)')
-    .eq('exam_id', examId);
+    .eq('exam_id', examId)
+    .eq('school_id', _currentSchoolId);
   if (error) throw error;
   return data;
 }
@@ -605,6 +654,7 @@ export async function getExamResults(examId) {
     .from('exam_results')
     .select('*, students(name, adm_no), classes(name, stream)')
     .eq('exam_id', examId)
+    .eq('school_id', _currentSchoolId)
     .order('class_position', { ascending: true });
   if (error) throw error;
   return data;
@@ -903,7 +953,8 @@ export async function voidPayment(paymentId, reason) {
       status: 'Voided',
       notes: reason ? `VOIDED: ${reason}` : 'Voided by Admin'
     })
-    .eq('id', paymentId);
+    .eq('id', paymentId)
+    .eq('school_id', _currentSchoolId);
     
   if (vErr) throw vErr;
 
@@ -938,7 +989,8 @@ export async function restorePayment(paymentId) {
       status: 'Success',
       notes: previousNotes ? `${previousNotes} | RESTORED on ${new Date().toISOString().split('T')[0]}` : `RESTORED on ${new Date().toISOString().split('T')[0]}`
     })
-    .eq('id', paymentId);
+    .eq('id', paymentId)
+    .eq('school_id', _currentSchoolId);
     
   if (rErr) throw rErr;
 
@@ -1004,33 +1056,43 @@ export async function applyFeeStructure() {
   const gradeFees = profile.gradeFees || {};
   const students = await getStudents();
   
+  // FIX: Bulk fetch all fee records to avoid N+1
+  const { data: currentFees } = await supabase
+    .from('fees')
+    .select('student_id, paid')
+    .eq('school_id', _currentSchoolId)
+    .eq('period_id', _currentPeriodId);
+    
+  const paidMap = {};
+  if (currentFees) {
+    currentFees.forEach(f => paidMap[f.student_id] = Number(f.paid));
+  }
+  
+  const upserts = [];
+  
   for (const student of students) {
     const finalFee = getCalculatedTotalFee(student, profile, termName);
-    
-    // Skip students without configured fees to avoid corrupting records
     if (finalFee === null) continue;
 
-    // Get current fee record for THIS period
-    const { data: currentFee } = await supabase
-      .from('fees')
-      .select('paid')
-      .eq('student_id', student.id)
-      .eq('period_id', _currentPeriodId)
-      .maybeSingle();
-      
-    const paid = currentFee ? Number(currentFee.paid) : 0;
+    const paid = paidMap[student.id] || 0;
     const newBalance = finalFee - paid;
 
-    await supabase
-      .from('fees')
-      .upsert({
-        school_id: _currentSchoolId,
-        student_id: student.id,
-        period_id: _currentPeriodId,
-        total_fee: finalFee,
-        paid: paid,
-        balance: newBalance
-      }, { onConflict: 'student_id,period_id' });
+    upserts.push({
+      school_id: _currentSchoolId,
+      student_id: student.id,
+      period_id: _currentPeriodId,
+      total_fee: finalFee,
+      paid: paid,
+      balance: newBalance
+    });
+  }
+  
+  if (upserts.length > 0) {
+    const CHUNK = 500;
+    for (let i = 0; i < upserts.length; i += CHUNK) {
+      const { error } = await supabase.from('fees').upsert(upserts.slice(i, i + CHUNK), { onConflict: 'student_id,period_id' });
+      if (error) console.error('applyFeeStructure bulk upsert error:', error);
+    }
   }
 }
 
@@ -1098,12 +1160,13 @@ export async function getCBC() {
 }
 
 export async function setCBC(studentId, subject, level) {
-  await supabase
+  const { error } = await supabase
     .from('cbc_assessments')
     .upsert(
       { school_id: _currentSchoolId, student_id: studentId, subject, level, period_id: _currentPeriodId },
       { onConflict: 'school_id,student_id,subject,period_id' }
     );
+  if (error) throw error;
 }
 
 // ============= CORE COMPETENCIES =============
@@ -1124,12 +1187,13 @@ export async function getCoreCompetencies() {
 }
 
 export async function setCoreCompetency(studentId, competency, level) {
-  await supabase
+  const { error } = await supabase
     .from('core_competencies')
     .upsert(
       { school_id: _currentSchoolId, student_id: studentId, competency, level, period_id: _currentPeriodId },
       { onConflict: 'school_id,student_id,competency,period_id' }
     );
+  if (error) throw error;
 }
 
 // ============= SCHOOL STRUCTURE =============
@@ -1271,7 +1335,7 @@ export async function saveTTPeriod(period) {
   if (!_currentSchoolId) throw new Error('No school context');
   const payload = { ...period, school_id: _currentSchoolId };
   if (period.id) {
-    const { data, error } = await supabase.from('tt_periods').update(payload).eq('id', period.id).select().single();
+    const { data, error } = await supabase.from('tt_periods').update(payload).eq('id', period.id).eq('school_id', _currentSchoolId).select().single();
     if (error) throw error;
     return data;
   }
@@ -1282,7 +1346,7 @@ export async function saveTTPeriod(period) {
 
 export async function deleteTTPeriod(id) {
   mutationGuard('deleteTTPeriod');
-  const { error } = await supabase.from('tt_periods').delete().eq('id', id);
+  const { error } = await supabase.from('tt_periods').delete().eq('id', id).eq('school_id', _currentSchoolId);
   if (error) throw error;
 }
 
@@ -1302,7 +1366,7 @@ export async function saveTTSubject(subject) {
   if (!_currentSchoolId) throw new Error('No school context');
   const payload = { ...subject, school_id: _currentSchoolId };
   if (subject.id) {
-    const { data, error } = await supabase.from('tt_subjects').update(payload).eq('id', subject.id).select().single();
+    const { data, error } = await supabase.from('tt_subjects').update(payload).eq('id', subject.id).eq('school_id', _currentSchoolId).select().single();
     if (error) throw error;
     return data;
   }
@@ -1333,7 +1397,8 @@ export async function saveTTTeacherSubject({ teacherId, subjectId, classId }) {
     .select()
     .single();
   if (error) throw error;
-  return data;
+  
+  // UNREACHABLE CODE FIX: We do not return data early, we want to execute the fallback sync below
   const { error: delError } = await supabase
     .from('subject_assignments')
     .delete()
@@ -1358,6 +1423,7 @@ export async function saveTTTeacherSubject({ teacherId, subjectId, classId }) {
       });
     if (insError) throw insError;
   }
+  return data;
 }
 
 export async function getTimetableConfig(schoolId, periodId, classLevel = 'Global') {
@@ -1733,7 +1799,7 @@ export async function getAssignmentStats(assignmentId, className, stream) {
 }
 
 export async function getQuizAnalytics(assignmentId) {
-  const { data: ast, error: e1 } = await supabase.from('lms_assignments').select('quiz_config, max_score, title').eq('id', assignmentId).single();
+  const { data: ast, error: e1 } = await supabase.from('lms_assignments').select('quiz_config, max_score, title').eq('id', assignmentId).eq('school_id', _currentSchoolId).single();
   if (e1) throw e1;
   const { data: subs, error: e2 } = await supabase.from('lms_submissions').select('quiz_results, grade_numeric').eq('assignment_id', assignmentId);
   if (e2) throw e2;
@@ -1761,7 +1827,7 @@ export async function getQuizAnalytics(assignmentId) {
 }
 
 export async function updateSubmission(submissionId, updates) {
-  const { data, error } = await supabase.from('lms_submissions').update(updates).eq('id', submissionId).select().single();
+  const { data, error } = await supabase.from('lms_submissions').update(updates).eq('id', submissionId).eq('school_id', _currentSchoolId).select().single();
   if (error) throw error;
   return data;
 }
@@ -1802,7 +1868,7 @@ export async function updateClass(id, updates) {
 
 export async function deleteClass(id) {
   mutationGuard('deleteClass');
-  const { error } = await supabase.from('classes').delete().eq('id', id);
+  const { error } = await supabase.from('classes').delete().eq('id', id).eq('school_id', _currentSchoolId);
   if (error) throw error;
 }
 
@@ -1842,7 +1908,7 @@ export async function saveTTSlot(slot) {
   const creatorId = (await getUserByAuthId(_currentAuthUser?.id))?.id;
   const payload = { ...slot, school_id: _currentSchoolId, created_by: creatorId, updated_at: new Date().toISOString() };
   if (slot.id) {
-    const { data, error } = await supabase.from('tt_slots').update(payload).eq('id', slot.id).select().single();
+    const { data, error } = await supabase.from('tt_slots').update(payload).eq('id', slot.id).eq('school_id', _currentSchoolId).select().single();
     if (error) throw error;
     return data;
   }
@@ -1853,7 +1919,7 @@ export async function saveTTSlot(slot) {
 
 export async function deleteTTSlot(id) {
   mutationGuard('deleteTTSlot');
-  const { error } = await supabase.from('tt_slots').delete().eq('id', id);
+  const { error } = await supabase.from('tt_slots').delete().eq('id', id).eq('school_id', _currentSchoolId);
   if (error) throw error;
 }
 
@@ -1927,7 +1993,7 @@ export async function closeAssignment(id) {
 
 export async function deleteAssignment(id) {
   mutationGuard('deleteAssignment');
-  const { error } = await supabase.from('el_assignments').delete().eq('id', id);
+  const { error } = await supabase.from('el_assignments').delete().eq('id', id).eq('school_id', _currentSchoolId);
   if (error) throw error;
 }
 

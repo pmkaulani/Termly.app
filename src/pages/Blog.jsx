@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { getSaasBlogPosts } from '../data/coreStore';;
+import DOMPurify from 'dompurify';
+import { getSaasBlogPosts } from '../data/coreStore';
 import { BookIcon, SparklesIcon, RocketIcon, TeacherIcon, ChartBarIcon, PrintIcon } from '../components/CommonIcons';
 import { Helmet } from 'react-helmet-async';
 import './Blog.css';
@@ -35,7 +36,7 @@ export default function Blog() {
             </div>
           </header>
           {selectedPost.image && <img src={selectedPost.image} alt={selectedPost.title} className="post-hero-image" />}
-          <div className="post-content" dangerouslySetInnerHTML={{ __html: selectedPost.content }} />
+          <div className="post-content" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(selectedPost.content) }} />
           
           <footer className="post-footer">
             <div className="cta-box">

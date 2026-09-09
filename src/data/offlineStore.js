@@ -85,32 +85,37 @@ export async function updateSyncStatus(id, status, error = null) {
  * In production, this would make an anonymous query to Supabase.
  */
 export async function validatePortalLogin(schoolSearch, admNo, phone) {
-  // Try to find a student who matches the ADM number exactly
-  const students = await db.students.where('adm_no').equalsIgnoreCase(admNo).toArray();
-  
-  if (students.length === 0) return null;
-  
-  // Refined check: also verify phone number (guardian phone)
-  const student = students.find(s => {
-    // Basic normalization: remove spaces/dashes if any
-    const sPhone = (s.parent_phone || '').replace(/[\s-]/g, '');
-    const pPhone = (phone || '').replace(/[\s-]/g, '');
-    return sPhone.includes(pPhone) || pPhone.includes(sPhone);
-  });
+  try {
+    // Try to find a student who matches the ADM number exactly
+    const students = await db.students.where('adm_no').equalsIgnoreCase(admNo).toArray();
+    
+    if (students.length === 0) return null;
+    
+    // Refined check: also verify phone number (guardian phone)
+    const student = students.find(s => {
+      // Basic normalization: remove spaces/dashes if any
+      const sPhone = (s.parent_phone || '').replace(/[\s-]/g, '');
+      const pPhone = (phone || '').replace(/[\s-]/g, '');
+      return sPhone.includes(pPhone) || pPhone.includes(sPhone);
+    });
 
-  if (!student) return null;
-  
-  // Try to find outstanding fees or communication history
-  const allComms = await db.communications.orderBy('timestamp').reverse().toArray();
-  
-  return {
-    id: student.id,
-    name: student.name,
-    class: student.class,
-    adm_no: student.adm_no,
-    residence_type: student.residence_type || 'day',
-    recent_comms: allComms.slice(0, 5) // Last 5 notices
-  };
+    if (!student) return null;
+    
+    // Try to find outstanding fees or communication history
+    const allComms = await db.communications.orderBy('timestamp').reverse().toArray();
+    
+    return {
+      id: student.id,
+      name: student.name,
+      class: student.class,
+      adm_no: student.adm_no,
+      residence_type: student.residence_type || 'day',
+      recent_comms: allComms.slice(0, 5) // Last 5 notices
+    };
+  } catch (err) {
+    console.error('Offline portal login validation failed:', err);
+    return null;
+  }
 }
 
 // ==========================================

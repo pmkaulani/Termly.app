@@ -37,10 +37,16 @@ export default function TeacherAssignmentManager() {
   };
 
   const handleAssign = async (subject, stream, teacherId) => {
-    const updated = { ...assignments };
-    if (!updated[selectedClass]) updated[selectedClass] = {};
-    if (!updated[selectedClass][stream]) updated[selectedClass][stream] = {};
-    updated[selectedClass][stream][subject] = teacherId;
+    const updated = {
+      ...assignments,
+      [selectedClass]: {
+        ...(assignments[selectedClass] || {}),
+        [stream]: {
+          ...(assignments[selectedClass]?.[stream] || {}),
+          [subject]: teacherId
+        }
+      }
+    };
 
     try {
       await saveSchoolProfile({ subjectAssignments: updated });

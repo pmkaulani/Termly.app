@@ -801,7 +801,7 @@ export default function Settings() {
         <div className="card">
           <div className="card-header">
             <div>
-              <h3>📐 Academic Configuration</h3>
+              <h3>Academic Configuration</h3>
               <p style={{fontSize:'0.78rem',color:'var(--text-light)',margin:'2px 0 0'}}>Classes, streams, subjects, and fee structure per level</p>
             </div>
             {/* Level tab switcher - FIXED: Scrollable on mobile */}

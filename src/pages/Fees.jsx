@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { isFeatureEnabled, getPrintHeader, getPrintFooter, getSchoolProfile, subscribeToChanges } from '../data/coreStore';
 import { getStudents } from '../data/studentStore';
 import { getFees, recordPayment, getFeeSummary, getMpesaLogs } from '../data/financeStore';
@@ -381,6 +381,21 @@ export default function Fees({ currentUser, currentPeriodId }) {
   const isAdmin   = currentUser?.role?.toLowerCase() === 'admin';
   const isFinance = currentUser?.role?.toLowerCase() === 'finance';
 
+  const refresh = useCallback(async () => {
+    try {
+      const [sData, fData, sumData, pData] = await Promise.all([
+        getStudents(), 
+        getFees(), 
+        getFeeSummary(),
+        getCurrentPeriodDetails()
+      ]);
+      setStudents(sData); 
+      setFees(fData); 
+      setSummary(sumData);
+      setActivePeriodState(pData);
+    } catch (err) { console.error(err); }
+  }, []);
+
   useEffect(() => {
     const init = async () => {
       if (featureLoading) return;
@@ -408,26 +423,11 @@ export default function Fees({ currentUser, currentPeriodId }) {
         unsubPayments();
       };
     }
-  }, [currentPeriodId, hasAccess, featureLoading]);
+  }, [currentPeriodId, hasAccess, featureLoading, refresh]);
 
-
-  const refresh = async () => {
-    try {
-      const [sData, fData, sumData, pData] = await Promise.all([
-        getStudents(), 
-        getFees(), 
-        getFeeSummary(),
-        getCurrentPeriodDetails()
-      ]);
-      setStudents(sData); 
-      setFees(fData); 
-      setSummary(sumData);
-      setActivePeriodState(pData);
-    } catch (err) { console.error(err); }
-  };
   const formatKSh = (n) => `KSh ${Number(n||0).toLocaleString()}`;
   
-  const computeStudentFee = (s) => {
+  const computeStudentFee = useCallback((s) => {
     const record = fees[s.id];
     if (record) return { 
       totalFee: Number(record.totalFee), 
@@ -453,20 +453,23 @@ export default function Fees({ currentUser, currentPeriodId }) {
       }
     }
     return { totalFee: totalBilled, paid: 0, balance: totalBilled };
-  };
+  }, [fees, profile, activePeriod]);
 
-  const filtered = students.filter(s => {
-    const f = computeStudentFee(s);
-    const ms = s.name.toLowerCase().includes(search.toLowerCase())||s.admNo.toLowerCase().includes(search.toLowerCase());
-    const mc = classFilter==='All'||s.class===classFilter;
-    const mstr = streamFilter==='All'||s.stream===streamFilter;
-    let mst = true;
-    if(statusFilter==='Paid') mst=(Number(f.balance)||0)<=0;
-    else if(statusFilter==='Partial') mst=(Number(f.paid)||0)>0&&(Number(f.balance)||0)>0;
-    else if(statusFilter==='Unpaid') mst=(Number(f.paid)||0)===0;
-    return ms&&mc&&mstr&&mst;
-  });
-  const printFeeList = async () => {
+  const filtered = React.useMemo(() => {
+    return students.filter(s => {
+      const f = computeStudentFee(s);
+      const ms = s.name.toLowerCase().includes(search.toLowerCase())||s.admNo.toLowerCase().includes(search.toLowerCase());
+      const mc = classFilter==='All'||s.class===classFilter;
+      const mstr = streamFilter==='All'||s.stream===streamFilter;
+      let mst = true;
+      if(statusFilter==='Paid') mst=(Number(f.balance)||0)<=0;
+      else if(statusFilter==='Partial') mst=(Number(f.paid)||0)>0&&(Number(f.balance)||0)>0;
+      else if(statusFilter==='Unpaid') mst=(Number(f.paid)||0)===0;
+      return ms&&mc&&mstr&&mst;
+    });
+  }, [students, search, classFilter, streamFilter, statusFilter, computeStudentFee]);
+
+  const printFeeList = useCallback(async () => {
     try {
       const list = filtered;
       const headerStr = await getPrintHeader(`Fee Report — ${classFilter} | ${streamFilter} | ${statusFilter}`);
@@ -492,7 +495,7 @@ export default function Fees({ currentUser, currentPeriodId }) {
     </body></html>`);
       w.document.close(); w.print();
     } catch(err){ alert({ title: 'Print Error', message: "Print failed: " + err.message, variant: 'danger' }); }
-  };
+  }, [filtered, classFilter, streamFilter, statusFilter]);
   const handlePayment = async (sid,amount,method,ref) => {
     setLoading(true);
     try {
@@ -504,6 +507,19 @@ export default function Fees({ currentUser, currentPeriodId }) {
       await refresh();
     } catch (err) { alert({ title: 'Payment Error', message: err.message, variant: 'danger' }); }
     finally { setLoading(false); }
+  };
+
+  const handleVoid = async (paymentId, reason) => {
+    setLoading(true);
+    try {
+      await voidPayment(paymentId, reason);
+      await refresh();
+    } catch (err) {
+      alert({ title: 'Void Error', message: err.message, variant: 'danger' });
+      throw err; // Re-throw to allow HistoryModal to handle its loading state if needed
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleSendReminder = async (s) => {

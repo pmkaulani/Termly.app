@@ -5,24 +5,44 @@ const TELEGRAM_CHAT_ID = Deno.env.get('TELEGRAM_CHAT_ID');
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY');
 const SUPERADMIN_EMAIL = Deno.env.get('SUPERADMIN_EMAIL');
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+const allowedOrigins = [
+  'https://termly.com',
+  'http://localhost:5173',
+  'capacitor://localhost',
+  'app://.'
+];
+
+function getCorsHeaders(req) {
+  const origin = req.headers.get('origin');
+  const allowedOrigin = allowedOrigins.includes(origin) ? origin : 'https://termly.com';
+  return {
+    'Access-Control-Allow-Origin': allowedOrigin,
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  };
 };
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
+    return new Response('ok', { headers: getCorsHeaders(req) });
   }
 
   try {
+    const WEBHOOK_SECRET = Deno.env.get('WEBHOOK_SECRET');
+    const secretHeader = req.headers.get('x-webhook-secret');
+    if (WEBHOOK_SECRET && secretHeader !== WEBHOOK_SECRET) {
+      return new Response(JSON.stringify({ error: 'Unauthorized: Invalid webhook secret' }), {
+        status: 401,
+        headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+      });
+    }
+
     const payload = await req.json();
 
     // Check if this is an INSERT into demo_requests
     if (payload.type !== 'INSERT' || payload.table !== 'demo_requests') {
       return new Response(JSON.stringify({ error: 'Ignored, not a new demo request' }), {
         status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
       });
     }
 
@@ -112,14 +132,14 @@ serve(async (req) => {
 
     return new Response(JSON.stringify({ success: true }), {
       status: 200,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
     });
 
   } catch (error) {
     console.error('Webhook processing error:', error);
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
     });
   }
 });

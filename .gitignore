@@ -11,6 +11,7 @@ public/downloads/
 .env
 .env.local
 .env.*.local
+supabase/.env.local
 
 # IDE / Editor
 .vscode/

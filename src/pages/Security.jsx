@@ -282,7 +282,7 @@ function AddUserModal({ onClose, onSave, error, isAtLimit }) {
                 <input 
                   type={showPassword ? "text" : "password"}
                   className="form-control" 
-                  placeholder="password123"
+                  placeholder="Leave blank to auto-generate"
                   value={password} 
                   onChange={e => setPassword(e.target.value)} 
                   style={{ paddingRight: 40 }}
@@ -299,7 +299,7 @@ function AddUserModal({ onClose, onSave, error, isAtLimit }) {
                 </button>
               </div>
               <small className="text-muted" style={{ display: 'block', marginTop: 4, fontSize: '0.75rem' }}>
-                Must be at least 6 characters. If left blank, defaults to "password123".
+                Must be at least 6 characters. If left blank, a secure temporary password will be generated.
               </small>
             </div>
           </div>

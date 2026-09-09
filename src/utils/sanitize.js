@@ -1,3 +1,5 @@
+import DOMPurify from 'dompurify';
+
 /**
  * Sanitizes input text before sending it to the database or processing.
  * - Trims leading/trailing whitespace
@@ -8,8 +10,8 @@ export function sanitizeString(str, maxLength = 255) {
   if (!str) return '';
   if (typeof str !== 'string') return String(str);
 
-  // 1. Remove HTML tags (basic script injection prevention)
-  let cleanStr = str.replace(/<[^>]*>?/gm, '');
+  // 1. Remove ALL HTML tags using DOMPurify instead of weak regex
+  let cleanStr = DOMPurify.sanitize(str, { ALLOWED_TAGS: [] });
 
   // 2. Trim padding spaces (e.g. "   John   " -> "John")
   cleanStr = cleanStr.trim();

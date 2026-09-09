@@ -305,7 +305,7 @@ export async function processMpesaPayment(callbackData) {
 
     if (!student) {
       // Mark as orphaned for manual reconciliation
-      await supabase.from('mpesa_callbacks').update({ status: 'orphaned' }).eq('id', log.id);
+      await supabase.from('mpesa_callbacks').update({ status: 'orphaned' }).eq('id', log.id).eq('school_id', _currentSchoolId);
       return { status: 'orphaned', message: 'Student not found' };
     }
 
@@ -316,11 +316,11 @@ export async function processMpesaPayment(callbackData) {
     await supabase.from('mpesa_callbacks').update({ 
       status: 'processed', 
       student_id: student.id 
-    }).eq('id', log.id);
+    }).eq('id', log.id).eq('school_id', _currentSchoolId);
 
     return { status: 'success', student: student.name };
   } catch (err) {
-    await supabase.from('mpesa_callbacks').update({ status: 'failed', result_desc: err.message }).eq('id', log.id);
+    await supabase.from('mpesa_callbacks').update({ status: 'failed', result_desc: err.message }).eq('id', log.id).eq('school_id', _currentSchoolId);
     throw err;
   }
 }
@@ -407,8 +407,8 @@ export async function autoProcessMpesaCallbacks() {
       }
     }
 
-    // 4. Process each pending callback
-    for (const cb of pending) {
+    // 4. Process pending callbacks concurrently instead of sequential N+1
+    const promises = pending.map(async (cb) => {
       const ref = (cb.bill_ref_number || '').trim().toUpperCase();
       const matchedStudentId = admLookup[ref];
 
@@ -425,10 +425,13 @@ export async function autoProcessMpesaCallbacks() {
         await supabase
           .from('mpesa_callbacks')
           .update({ status: 'orphaned' })
-          .eq('id', cb.id);
+          .eq('id', cb.id)
+          .eq('school_id', _currentSchoolId);
         orphaned++;
       }
-    }
+    });
+    
+    await Promise.all(promises);
 
     if (processed > 0) {
       await logPlatformActivity(
@@ -476,6 +479,7 @@ export async function reconcileMpesaPayment(callbackId, studentId) {
     .from('mpesa_callbacks')
     .select('*')
     .eq('id', callbackId)
+    .eq('school_id', _currentSchoolId)
     .single();
   
   if (cbError) throw cbError;
@@ -488,7 +492,8 @@ export async function reconcileMpesaPayment(callbackId, studentId) {
       student_id: studentId,
       status: 'processed'
     })
-    .eq('id', callbackId);
+    .eq('id', callbackId)
+    .eq('school_id', _currentSchoolId);
   
   if (updateError) throw updateError;
 
@@ -537,9 +542,10 @@ export async function submitPayment(amount, transactionCode, notes = '') {
   if (error) throw error;
 
   // Update last payment status in school profile
-  await supabase
+  const { error: profileError } = await supabase
     .from('school_profiles')
     .upsert({ school_id: _currentSchoolId, last_payment_status: 'pending' }, { onConflict: 'school_id' });
+  if (profileError) throw profileError;
 
   await logPlatformActivity('PAYMENT_SUBMIT', `New payment of KSh ${amount.toLocaleString()} submitted via code: ${transactionCode}`, _currentSchoolId);
 }
@@ -600,10 +606,11 @@ export async function approvePayment(paymentId, schoolId, monthsToAdd = 4) {
   if (sError) throw sError;
 
   // 3. Sync status to schools table
-  await supabase
+  const { error: masterErr } = await supabase
     .from('schools')
     .update({ status: 'Active' })
     .eq('id', schoolId);
+  if (masterErr) console.warn('Failed to sync master school status:', masterErr);
 
   await logPlatformActivity('PAYMENT_APPROVE', `Approved payment for ${schoolId}`, schoolId);
 }
@@ -615,9 +622,10 @@ export async function rejectPayment(paymentId, schoolId, reason = 'Verification 
     .eq('id', paymentId);
   if (error) throw error;
 
-  await supabase
+  const { error: profileError } = await supabase
     .from('school_profiles')
     .upsert({ school_id: schoolId, last_payment_status: 'rejected' }, { onConflict: 'school_id' });
+  if (profileError) throw profileError;
 
   await logPlatformActivity('PAYMENT_REJECT', `Rejected payment for ${schoolId}: ${reason}`, schoolId);
 }
@@ -693,7 +701,7 @@ export async function simulateMpesaSTKPush(student, amount, phone) {
   const payment = await recordPayment(student.id, amount, 'M-Pesa', mpesaRef);
 
   // 4. Inject into mpesa_logs to simulate Daraja API webhook firing
-  await supabase.from('mpesa_callbacks').insert({
+  const { error: cbErr } = await supabase.from('mpesa_callbacks').insert({
     school_id: _currentSchoolId,
     phone_number: phone,
     amount: amount,
@@ -703,17 +711,22 @@ export async function simulateMpesaSTKPush(student, amount, phone) {
     student_id: student.id,
     raw_payload: { mocked: true }
   });
+  if (cbErr) throw cbErr;
 
   // 5. Synthesize an automated SMS receipt into the offline communications store
-  const { db } = await import('./offlineStore');
-  await db.communications.add({
-    type: 'SMS',
-    target: 'single',
-    message: `Dear Parent, we confirm receipt of Ksh ${amount} via M-Pesa (${mpesaRef}) for ${student.name}. Thank you.`,
-    timestamp: new Date().toISOString(),
-    user: 'M-Pesa Auto-Bot',
-    recipientCount: 1
-  });
+  try {
+    const { db } = await import('./offlineStore');
+    await db.communications.add({
+      type: 'SMS',
+      target: 'single',
+      message: `Dear Parent, we confirm receipt of Ksh ${amount} via M-Pesa (${mpesaRef}) for ${student.name}. Thank you.`,
+      timestamp: new Date().toISOString(),
+      user: 'M-Pesa Auto-Bot',
+      recipientCount: 1
+    });
+  } catch (e) {
+    console.error('Failed to log mocked SMS to IndexedDB:', e);
+  }
 
   return payment;
 }

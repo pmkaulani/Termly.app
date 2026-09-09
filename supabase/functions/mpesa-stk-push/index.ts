@@ -1,9 +1,20 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+const allowedOrigins = [
+  'https://termly.com',
+  'http://localhost:5173',
+  'capacitor://localhost',
+  'app://.'
+];
+
+function getCorsHeaders(req) {
+  const origin = req.headers.get('origin');
+  const allowedOrigin = allowedOrigins.includes(origin) ? origin : 'https://termly.com';
+  return {
+    'Access-Control-Allow-Origin': allowedOrigin,
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  };
 }
 
 async function getOAuthToken(env: string, key: string, secret: string) {
@@ -24,10 +35,23 @@ async function getOAuthToken(env: string, key: string, secret: string) {
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
+    return new Response('ok', { headers: getCorsHeaders(req) })
   }
 
   try {
+    const supabaseClient = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
+      { global: { headers: { Authorization: req.headers.get('Authorization')! } } }
+    );
+    const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
+    if (authError || !user) {
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+        status: 401,
+        headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+      });
+    }
+
     const { action, payload } = await req.json();
 
     const CONSUMER_KEY = Deno.env.get('MPESA_CONSUMER_KEY') ?? '';
@@ -43,12 +67,12 @@ serve(async (req) => {
         console.log(`[MPESA-MOCK] STK Push to ${phoneNumber} for KSh ${amount}`);
         return new Response(
           JSON.stringify({ success: true, MerchantRequestID: 'MOCK-' + Date.now(), CheckoutRequestID: 'WS-' + Math.random().toString(36).substr(2, 9) }),
-          { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
+          { headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }, status: 200 }
         );
       } else {
         return new Response(
           JSON.stringify({ status: 'Pending' }),
-          { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
+          { headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }, status: 200 }
         );
       }
     }
@@ -126,7 +150,7 @@ serve(async (req) => {
           CheckoutRequestID: result.CheckoutRequestID,
           ResponseDescription: result.ResponseDescription
         }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
+        { headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }, status: 200 }
       );
     } else if (action === 'status') {
       const { checkoutRequestId } = payload;
@@ -152,17 +176,17 @@ serve(async (req) => {
       const result = await response.json();
       return new Response(
         JSON.stringify(result),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
+        { headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }, status: 200 }
       );
     }
 
     return new Response(
       JSON.stringify({ error: 'Invalid action' }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
+      { headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }, status: 400 }
     );
   } catch (error) {
     return new Response(JSON.stringify({ error: error.message }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
       status: 400,
     })
   }

@@ -31,15 +31,6 @@ export default function AcademicCenter({ currentUser, currentPeriodId }) {
             <h1 style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--text)' }}>Academic Center</h1>
             <p style={{ color: 'var(--text-muted)', marginTop: '4px' }}>Unified management for teaching and learning</p>
           </div>
-          
-          <div className="tab-nav" style={{ display: 'flex', gap: 8, background: 'rgba(0,0,0,0.05)', padding: 6, borderRadius: 12 }}>
-            <button 
-              className="btn btn-sm btn-primary"
-              onClick={() => setActiveSubTab('assessment')}
-            >
-              <DashboardIcon size={14} /> Assessments
-            </button>
-          </div>
         </div>
       </div>
 

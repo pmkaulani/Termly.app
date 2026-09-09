@@ -69,34 +69,25 @@ export default function MigrationsTab() {
           <span>SQL Execution Console</span>
           <button onClick={loadStatus} title="Refresh Status"><RefreshIcon size={14} /></button>
         </div>
-        <textarea
-          placeholder="-- Paste SQL patch here...
--- Example: ALTER TABLE schools ADD COLUMN is_platform_account BOOLEAN DEFAULT FALSE;"
-          value={sql}
-          onChange={(e) => setSql(e.target.value)}
-          spellCheck="false"
-        ></textarea>
+        <div style={{ padding: '40px 20px', textAlign: 'center', color: '#94A3B8' }}>
+          <ShieldIcon size={32} style={{ margin: '0 auto 16px', color: '#EF4444' }} />
+          <h4 style={{ color: '#F8FAFC', marginBottom: 8, fontSize: '1.1rem' }}>Client-Side Migrations Disabled</h4>
+          <p style={{ maxWidth: 400, margin: '0 auto', lineHeight: 1.5 }}>
+            Direct schema migrations from the frontend have been disabled for security reasons. 
+            Please use the <strong>Supabase CLI</strong> (<code>supabase db push</code>) or the 
+            Supabase dashboard to apply schema changes.
+          </p>
+        </div>
         <div className="console-footer">
-          <div className="sql-hint">Gated by Platform Admin role + Edge Function validation.</div>
+          <div className="sql-hint">Access restricted due to security policies.</div>
           <button 
             className="exec-btn" 
-            onClick={handleMigrate} 
-            disabled={executing || !sql.trim()}
+            disabled={true}
           >
-            {executing ? 'Executing...' : <><RocketIcon size={16} /> Run SQL Patch</>}
+            <RocketIcon size={16} /> Run SQL Patch
           </button>
         </div>
       </div>
-
-      {result && (
-        <div className={`execution-result ${result.success ? 'success' : 'error'}`}>
-          <div className="result-header">
-            <ActivityIcon size={16} />
-            <span>Execution {result.success ? 'Success' : 'Failed'}</span>
-          </div>
-          <pre>{result.success ? JSON.stringify(result.data, null, 2) : result.error}</pre>
-        </div>
-      )}
 
       <style>{`
         .migrations-tab { padding: 24px; }
