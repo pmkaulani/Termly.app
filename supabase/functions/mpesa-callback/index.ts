@@ -3,12 +3,19 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 
 serve(async (req) => {
   try {
+    const url = new URL(req.url);
+    const callbackToken = url.searchParams.get('token');
+    const expectedToken = Deno.env.get('MPESA_CALLBACK_TOKEN');
+
+    if (!expectedToken || callbackToken !== expectedToken) {
+      console.error('Unauthorized callback attempt. Invalid or missing token.');
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
+    }
+
     const body = await req.json();
     const stkCallback = body?.Body?.stkCallback;
 
     if (!stkCallback) {
-      // Not a shape we recognize — still return 200 so Safaricom doesn't
-      // retry indefinitely, but log it so a malformed callback isn't silent.
       console.error('Unrecognized M-Pesa callback shape:', JSON.stringify(body));
       return new Response(JSON.stringify({ ResultCode: 0, ResultDesc: 'Accepted' }), { status: 200 });
     }
@@ -20,60 +27,104 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    // Find the pending record mpesa-stk-push created when the push was sent.
+    // 1. Locate the pending callback row
     const { data: pending, error: findError } = await supabaseAdmin
       .from('mpesa_callbacks')
-      .select('id')
+      .select('*')
       .eq('checkout_request_id', CheckoutRequestID)
-      .single();
+      .maybeSingle();
 
     if (findError || !pending) {
-      // A callback arrived that doesn't match anything we sent — could be a
-      // stale/duplicate delivery, or the initial insert in mpesa-stk-push
-      // failed silently. Either way, log it; there's nothing to update.
       console.error(`No matching mpesa_callbacks row for CheckoutRequestID ${CheckoutRequestID}`);
       return new Response(JSON.stringify({ ResultCode: 0, ResultDesc: 'Accepted' }), { status: 200 });
     }
 
-    if (ResultCode === 0) {
-      // Success — pull the confirmed amount/receipt/date out of
-      // CallbackMetadata.Item, which Safaricom sends as a flat array of
-      // {Name, Value} pairs rather than a normal object.
-      const items = stkCallback.CallbackMetadata?.Item || [];
-      const getVal = (name) => items.find((i) => i.Name === name)?.Value;
+    // 2. Idempotency check: if already completed, do NOT double credit
+    if (pending.status === 'completed' || pending.status === 'processed') {
+      console.log(`Duplicate callback received for CheckoutRequestID ${CheckoutRequestID}. Already processed.`);
+      return new Response(JSON.stringify({ ResultCode: 0, ResultDesc: 'Accepted' }), { status: 200 });
+    }
 
+    // 3. Process outcome
+    if (ResultCode === 0) {
+      const items = stkCallback.CallbackMetadata?.Item || [];
+      const getVal = (name: string) => items.find((i: any) => i.Name === name)?.Value;
+      const receiptNo = String(getVal('MpesaReceiptNumber') || '').trim();
+      const confirmedAmount = Number(getVal('Amount') || pending.amount);
+      const transactionDate = getVal('TransactionDate');
+      const payerPhone = getVal('PhoneNumber');
+
+      // Update callback record
       await supabaseAdmin.from('mpesa_callbacks').update({
-        status: 'pending', // matches what autoProcessMpesaCallbacks() already reads and reconciles
+        status: 'completed',
         result_code: ResultCode,
-        mpesa_receipt_number: getVal('MpesaReceiptNumber'),
-        amount: getVal('Amount'),
-        transaction_date: getVal('TransactionDate'),
-        phone_number: getVal('PhoneNumber'),
+        mpesa_receipt_number: receiptNo,
+        amount: confirmedAmount,
+        transaction_date: transactionDate,
+        phone_number: payerPhone,
         result_desc: ResultDesc,
+        updated_at: new Date().toISOString()
       }).eq('id', pending.id);
+
+      // Reconcile fee ledger idempotently
+      if (pending.bill_ref_number && pending.school_id) {
+        const { data: student } = await supabaseAdmin
+          .from('students')
+          .select('id')
+          .eq('school_id', pending.school_id)
+          .or(`adm_no.eq.${pending.bill_ref_number},id.eq.${pending.bill_ref_number}`)
+          .maybeSingle();
+
+        if (student) {
+          const { data: fee } = await supabaseAdmin
+            .from('fees')
+            .select('id, balance, paid')
+            .eq('student_id', student.id)
+            .maybeSingle();
+
+          if (fee) {
+            // Check if payment with this receipt already recorded
+            const { data: existingPayment } = await supabaseAdmin
+              .from('fee_payments')
+              .select('id')
+              .eq('reference', receiptNo)
+              .maybeSingle();
+
+            if (!existingPayment) {
+              await supabaseAdmin.from('fee_payments').insert({
+                fee_id: fee.id,
+                amount: confirmedAmount,
+                method: 'M-Pesa',
+                reference: receiptNo,
+                receipt_number: receiptNo,
+                date: new Date().toISOString(),
+                status: 'Confirmed'
+              });
+
+              await supabaseAdmin.from('fees').update({
+                paid: (Number(fee.paid) || 0) + confirmedAmount,
+                balance: (Number(fee.balance) || 0) - confirmedAmount
+              }).eq('id', fee.id);
+            }
+          }
+        }
+      }
     } else {
-      // Customer cancelled, entered the wrong PIN, timed out, etc. —
-      // ResultCode is non-zero for all of these. Record it as failed
-      // rather than leaving it stuck in 'awaiting_callback' forever.
+      // Payment failed / cancelled / timed out
       await supabaseAdmin.from('mpesa_callbacks').update({
         status: 'failed',
         result_code: ResultCode,
         result_desc: ResultDesc,
+        updated_at: new Date().toISOString()
       }).eq('id', pending.id);
     }
 
-    // Safaricom expects exactly this shape back, regardless of outcome —
-    // it's an acknowledgment that you received the callback, not a
-    // reflection of whether the payment succeeded.
     return new Response(JSON.stringify({ ResultCode: 0, ResultDesc: 'Accepted' }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     });
   } catch (error) {
     console.error('mpesa-callback error:', error.message);
-    // Still 200 — a 4xx/5xx here just makes Safaricom retry the same
-    // callback repeatedly, which won't fix whatever the underlying
-    // problem was.
     return new Response(JSON.stringify({ ResultCode: 0, ResultDesc: 'Accepted' }), { status: 200 });
   }
-})
+});

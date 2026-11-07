@@ -429,12 +429,16 @@ export default function Students({ currentUser, currentPeriodId }) {
       </div>
 
       {showModal&&<StudentModal student={editingStudent} profile={profile} onSave={handleSave} onClose={()=>{setShowModal(false);setEditingStudent(null);}}/>}
-      {showImportModal && <StudentImporter profile={profile} onImport={async(students) => { 
+      {showImportModal && <StudentImporter profile={profile} onImport={async (result) => { 
         setLoading(true); 
-        for(let s of students) await addStudent(s); 
-        await refresh(); 
-        setShowImportModal(false); 
-        setLoading(false); 
+        try {
+          await refresh(); 
+          setShowImportModal(false); 
+        } catch (err) {
+          alert({ title: 'Refresh Error', message: err.message, variant: 'danger' });
+        } finally {
+          setLoading(false); 
+        }
       }} onClose={() => setShowImportModal(false)} />}
       {selectedStudent&&<StudentDetail student={selectedStudent} feeData={fees[selectedStudent.id]||{}} onClose={()=>setSelectedStudent(null)} onEdit={()=>{setSelectedStudent(null);setEditingStudent(selectedStudent);setShowModal(true);}} currentUser={currentUser} profile={profile}/>}
       {showTransitionModal&&<TransitionModal students={students} profile={profile} onTransfer={handleTransfer} onClose={()=>setShowTransitionModal(false)} confirm={confirm}/>}

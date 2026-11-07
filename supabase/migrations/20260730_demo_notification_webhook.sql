@@ -20,7 +20,7 @@ FOR EACH ROW
 EXECUTE FUNCTION supabase_functions.http_request(
     'http://supabase_kong_Termly:8000/functions/v1/notify-demo-request',
     'POST',
-    '{"Content-Type":"application/json"}',
+    '{"Content-Type":"application/json", "x-webhook-secret":"local-dev-secret-12345"}',
     '{}',
     '1000'
 );

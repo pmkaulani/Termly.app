@@ -152,7 +152,7 @@ export async function updateTeacher(id, updates) {
        const safePayload = { ...payload };
        delete safePayload.pin;
        if (Object.keys(safePayload).length > 0) {
-         const { data: retryData, error: retryErr } = await supabase.from('teachers').update(safePayload).eq('id', id).select().single();
+         const { data: retryData, error: retryErr } = await supabase.from('teachers').update(safePayload).eq('id', id).eq('school_id', _currentSchoolId).select().single();
          if (retryErr) throw retryErr;
          try { await db.teachers.put(retryData); } catch(e) {}
          return retryData;
@@ -169,7 +169,7 @@ export async function deleteTeacher(id) {
   const { data: teacher } = await supabase.from('teachers').select('school_id').eq('id', id).single();
   const schoolId = teacher?.school_id || _currentSchoolId;
 
-  const { error } = await supabase.from('teachers').delete().eq('id', id);
+  const { error } = await supabase.from('teachers').delete().eq('id', id).eq('school_id', _currentSchoolId);
   if (error) throw error;
   try { await db.teachers.delete(id); } catch(e) {}
 

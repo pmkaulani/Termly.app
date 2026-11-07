@@ -3,9 +3,9 @@ import { useEffect, useRef } from 'react';
 /**
  * Hook to automatically trigger an onIdle callback after period of inactivity.
  * @param {Function} onIdle - Callback when user is idle
- * @param {number} timeoutMs - Timeout in milliseconds (default: 20 minutes)
+ * @param {number} timeoutMs - Timeout in milliseconds (default: 15 minutes)
  */
-export function useIdleTimeout(onIdle, timeoutMs = 20 * 60 * 1000) {
+export function useIdleTimeout(onIdle, timeoutMs = 15 * 60 * 1000) {
   const timerRef = useRef(null);
 
   useEffect(() => {

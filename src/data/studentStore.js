@@ -149,6 +149,7 @@ export async function getStudent(id) {
     .from('students')
     .select('id, name, adm_no, class, stream, parent, parent_phone, gender, dob, join_date, notes, school_id, birth_cert_no, county, father_name, father_phone, mother_name, mother_phone, residence_type, house, subjects')
     .eq('id', id)
+    .eq('school_id', _currentSchoolId)
     .single();
   if (error) throw error;
   return data ? { ...data, admNo: data.adm_no, parentPhone: data.parent_phone, joinDate: data.join_date, residenceType: data.residence_type || 'day', house: data.house || null } : null;
@@ -215,7 +216,7 @@ export async function addStudent(student) {
       baseFee = Number(feeConfig) || TERM_FEE;
     }
   }
-  await supabase.from('fees').insert({
+  const { error: feeError } = await supabase.from('fees').insert({
     school_id: _currentSchoolId,
     student_id: data.id,
     period_id: _currentPeriodId,
@@ -223,6 +224,10 @@ export async function addStudent(student) {
     paid: 0,
     balance: baseFee,
   });
+  if (feeError) {
+    console.error('Failed to create fee record for new student:', feeError);
+    // Continue anyway so student creation doesn't completely fail
+  }
 
   await logPlatformActivity('STUDENT_ADD', `Added new student: ${student.name}`);
   const newStudent = { 
@@ -277,6 +282,7 @@ export async function updateStudent(id, updates) {
     .from('students')
     .update(row)
     .eq('id', id)
+    .eq('school_id', _currentSchoolId)
     .select()
     .single();
   if (error) throw error;
@@ -291,21 +297,30 @@ export async function updateStudent(id, updates) {
 export async function migrateExistingStudentsSubjects() {
   const students = await getStudents();
   const profile = await getSchoolProfile();
-  let migrated = 0;
-
+  
+  const updates = [];
   for (const s of students) {
     if (!s.subjects || s.subjects.length === 0) {
       const defaultSubs = getSubjectsForGrade(s.class, profile);
-      await updateStudent(s.id, { subjects: defaultSubs });
-      migrated++;
+      updates.push({ id: s.id, subjects: defaultSubs });
     }
   }
-  return migrated;
+
+  if (updates.length > 0) {
+    // Supabase JS doesn't have a bulk update by ID easily without upserting full rows.
+    // To do it efficiently, we can use an RPC or do a map. We'll map and await Promise.all
+    // which is better than sequential awaiting in a loop.
+    await Promise.all(updates.map(u => 
+      supabase.from('students').update({ subjects: u.subjects }).eq('id', u.id).eq('school_id', _currentSchoolId)
+    ));
+  }
+  
+  return updates.length;
 }
 
 export async function deleteStudent(id) {
   mutationGuard('deleteStudent');
-  const { error } = await supabase.from('students').delete().eq('id', id);
+  const { error } = await supabase.from('students').delete().eq('id', id).eq('school_id', _currentSchoolId);
   if (error) throw error;
   // Sync to local DB immediately
   try { await db.students.delete(id); } catch(e) {}
@@ -320,6 +335,7 @@ export async function archiveStudent(id, targetStatus = 'Transferred', reason = 
       notes: reason ? `[ARCHIVED: ${new Date().toLocaleDateString()}] ${reason}` : undefined
     })
     .eq('id', id)
+    .eq('school_id', _currentSchoolId)
     .select()
     .single();
     
@@ -354,39 +370,159 @@ export async function transferStudents(selectedIds, direction = 'promote') {
   });
 
   for (const u of updates) {
-    const { error } = await supabase.from('students').update({ class: u.newClass }).eq('id', u.id);
+    const { error } = await supabase.from('students').update({ class: u.newClass }).eq('id', u.id).eq('school_id', _currentSchoolId);
     if (error) throw error;
   }
   return await getStudents();
 }
 
-export async function bulkImportStudents(studentsData, onProgress) {
+export async function bulkImportStudents(studentsData, onProgress, options = {}) {
   mutationGuard('bulkImportStudents');
   if (!_currentSchoolId) throw new Error('No school context');
 
+  const { duplicateAction = 'skip' } = options; // 'skip' or 'update'
+  const profile = await getSchoolProfile();
+  const existingStudents = await getStudents();
+  const existingMap = new Map();
+  existingStudents.forEach(s => {
+    const adm = String(s.admNo || s.adm_no || '').trim().toLowerCase();
+    if (adm) existingMap.set(adm, s);
+  });
+
   const BATCH_SIZE = 50;
-  let successCount = 0;
+  let insertedCount = 0;
+  let updatedCount = 0;
+  let skippedCount = 0;
+  const errors = [];
+  const seenBatchAdmNos = new Set();
 
-  for (let i = 0; i < studentsData.length; i += BATCH_SIZE) {
-    const batch = studentsData.slice(i, i + BATCH_SIZE).map(s => ({
-      ...s,
-      school_id: _currentSchoolId,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    }));
+  const toInsert = [];
+  const toUpdate = [];
 
-    const { error } = await supabase.from('students').insert(batch);
-    if (error) {
-      console.error('Batch import error:', error);
-      throw error;
+  studentsData.forEach((s, idx) => {
+    const admNo = String(s.admNo || s.adm_no || '').trim();
+    const name = String(s.name || '').trim();
+    const className = String(s.class || s.class_grade || '').trim();
+
+    if (!name || name.length < 2) {
+      errors.push({ row: idx + 1, name: name || 'Unknown', reason: 'Student name is required (min 2 chars)' });
+      return;
+    }
+    if (!className) {
+      errors.push({ row: idx + 1, name, reason: 'Class is required (no default will be assigned)' });
+      return;
+    }
+    if (!admNo) {
+      errors.push({ row: idx + 1, name, reason: 'Admission number is required' });
+      return;
     }
 
-    successCount += batch.length;
-    if (onProgress) onProgress(successCount, studentsData.length);
+    const lowerAdm = admNo.toLowerCase();
+    if (seenBatchAdmNos.has(lowerAdm)) {
+      errors.push({ row: idx + 1, name, reason: `Duplicate admission number (${admNo}) in uploaded batch` });
+      return;
+    }
+    seenBatchAdmNos.add(lowerAdm);
+
+    const record = {
+      school_id: _currentSchoolId,
+      adm_no: admNo,
+      name,
+      class: className,
+      stream: s.stream || 'General',
+      gender: s.gender || '',
+      dob: s.dob || null,
+      parent: s.parent || s.parentName || '',
+      parent_phone: s.parentPhone || s.parent_phone || '',
+      status: 'Active',
+      subjects: getSubjectsForGrade(className, profile)
+    };
+
+    if (existingMap.has(lowerAdm)) {
+      const existing = existingMap.get(lowerAdm);
+      if (duplicateAction === 'update') {
+        toUpdate.push({ id: existing.id, ...record });
+      } else {
+        skippedCount++;
+      }
+    } else {
+      toInsert.push(record);
+    }
+  });
+
+  // Execute Inserts in batches
+  for (let i = 0; i < toInsert.length; i += BATCH_SIZE) {
+    const batch = toInsert.slice(i, i + BATCH_SIZE);
+    const { data: insertedData, error } = await supabase
+      .from('students')
+      .insert(batch)
+      .select();
+
+    if (error) {
+      console.error('Batch insert error:', error);
+      batch.forEach((b, bIdx) => {
+        errors.push({ row: i + bIdx + 1, name: b.name, reason: error.message });
+      });
+    } else {
+      const records = insertedData || batch;
+      insertedCount += records.length;
+
+      // Create fee records and local cache
+      for (const rec of records) {
+        try {
+          if (rec.id) {
+            await supabase.from('fees').insert({
+              school_id: _currentSchoolId,
+              student_id: rec.id,
+              period_id: _currentPeriodId,
+              total_fee: TERM_FEE,
+              paid: 0,
+              balance: TERM_FEE
+            });
+            await db.students.put(rec);
+          }
+        } catch (e) {
+          // ignore non-critical fee error
+        }
+      }
+    }
+
+    if (onProgress) onProgress(insertedCount + updatedCount, studentsData.length);
   }
 
-  await logPlatformActivity('STUDENTS_IMPORT', `Imported ${successCount} students in bulk`, _currentSchoolId);
-  return { success: true, count: successCount };
+  // Execute Updates
+  for (const upd of toUpdate) {
+    const { id, ...fields } = upd;
+    const { error: updErr } = await supabase
+      .from('students')
+      .update(fields)
+      .eq('id', id)
+      .eq('school_id', _currentSchoolId);
+
+    if (updErr) {
+      errors.push({ row: 0, name: fields.name, reason: updErr.message });
+    } else {
+      updatedCount++;
+      try { await db.students.update(id, fields); } catch (e) {}
+    }
+
+    if (onProgress) onProgress(insertedCount + updatedCount, studentsData.length);
+  }
+
+  await logPlatformActivity(
+    'STUDENTS_IMPORT',
+    `Imported ${insertedCount} new students, updated ${updatedCount}, skipped ${skippedCount}`,
+    _currentSchoolId
+  );
+
+  return {
+    success: errors.length === 0 || insertedCount + updatedCount > 0,
+    count: insertedCount + updatedCount,
+    inserted: insertedCount,
+    updated: updatedCount,
+    skipped: skippedCount,
+    errors
+  };
 }
 
 

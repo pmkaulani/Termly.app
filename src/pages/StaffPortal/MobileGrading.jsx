@@ -290,7 +290,7 @@ export default function MobileGrading({ user, onLogout }) {
         for (const [studentId, data] of Object.entries(marksBuffer)) {
           await saveGradingDraft(selectedPaper.id, studentId, user.id, data);
         }
-        alert({ title: 'Saved Offline', message: 'Offline mode active. Marks saved locally and will auto-sync when online.', variant: 'warning' });
+        alert({ title: 'Saved Offline', message: 'Marks are stored on this device. Cloud sync is not yet confirmed; reconnect and retry the save before relying on them.', variant: 'warning' });
       }
     } catch (err) {
       console.error('[PORTAL] Save error, backing up locally:', err);
@@ -298,7 +298,7 @@ export default function MobileGrading({ user, onLogout }) {
       for (const [studentId, data] of Object.entries(marksBuffer)) {
         await saveGradingDraft(selectedPaper.id, studentId, user.id, data);
       }
-      alert({ title: 'Saved Locally', message: 'Could not reach cloud. Marks saved offline and queued for background sync.', variant: 'warning' });
+      alert({ title: 'Saved on This Device', message: 'Cloud save failed. A local backup was created, but the school database has not confirmed these marks. Reconnect and retry before leaving this page.', variant: 'warning' });
     } finally {
       setSaving(false);
     }

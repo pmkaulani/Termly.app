@@ -72,31 +72,33 @@ export async function triggerSync() {
             if (!err4) success = true; break;
           }
           case syncTypes.SYNC_GRADES: {
-            // Phase 1: Sync offline grading drafts to supabase
             const { getGradingDrafts, markDraftsSynced } = await import('./offlineStore.js');
+            const { saveExamMarks } = await import('./academicsStore.js');
             try {
               const drafts = await getGradingDrafts(item.payload.exam_paper_id);
-              const unsyncedDrafts = drafts.filter(d => !d.synced);
+              const unsyncedDrafts = drafts.filter(d => !d.synced || d.synced === 0 || d.synced === false);
               if (unsyncedDrafts.length > 0) {
                 const marks = unsyncedDrafts.map(d => ({
-                  exam_paper_id: d.exam_paper_id,
                   student_id: d.student_id,
-                  raw_score: d.is_absent ? null : d.raw_score,
-                  is_absent: d.is_absent,
+                  raw_score: d.is_absent ? null : ((d.raw_score === '' || d.raw_score === null || d.raw_score === undefined) ? null : Number(d.raw_score)),
+                  is_absent: Boolean(d.is_absent),
                   remarks: d.remarks || '',
                 }));
-                const { error: err5 } = await supabase.from('exam_marks').upsert(marks, {
-                  onConflict: 'exam_paper_id,student_id',
-                });
-                if (!err5) {
+                // Route through server-authorized RPC with verified session token
+                const result = await saveExamMarks(item.payload.exam_paper_id, marks);
+                if (result && (result.success || !result.error)) {
                   await markDraftsSynced(unsyncedDrafts.map(d => d.id));
                   success = true;
+                } else {
+                  console.error("Server rejected offline grade sync:", result);
+                  success = false;
                 }
               } else {
-                success = true; // Nothing to sync
+                success = true;
               }
             } catch (err) {
               console.error("Offline grade sync failed:", err);
+              success = false;
             }
             break;
           }

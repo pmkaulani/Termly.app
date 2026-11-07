@@ -1,5 +1,6 @@
 import { supabase } from '../lib/supabase';
 import { _currentSchoolId, mutationGuard, getSchoolProfileBySchoolId, checkIsSubscriptionActive, checkFeatureAccess, logPlatformActivity, hasFeature, getCurrentSchoolId } from './coreStore';
+import { generateTempPassword } from '../utils/securityUtils';
 
 // ============================================================================
 // AUTH MODULE: API LAYER for Login & Register
@@ -111,7 +112,7 @@ export async function addUser(user) {
     new_email: user.email,
     new_name: user.name,
     new_role: user.role,
-    new_password: user.password || 'password123',
+    new_password: user.password || generateTempPassword(),
     target_school_id: getCurrentSchoolId()
   });
 
@@ -236,6 +237,7 @@ export async function validateStaffLogin(schoolSearch, phone, pin, schoolId = nu
 
   // Pass through both user_id and teacher_record_id for dual-ID matching
   return {
+    token: data.token || null,
     id: data.id,
     name: data.name,
     role: 'teacher',
@@ -306,6 +308,7 @@ export async function validateParentLogin(schoolSearch, admNo, phone, schoolId =
   }
 
   return {
+    token: data.token || null,
     id: data.id,
     name: data.name,
     class: data.class,
@@ -319,16 +322,39 @@ export async function validateParentLogin(schoolSearch, admNo, phone, schoolId =
   };
 }
 
-export async function resetUserPassword(authUserId, newPassword = 'password123') {
+export async function resetUserPassword(authUserId, newPassword = null) {
+  const passwordToSet = newPassword || generateTempPassword();
   // In a real app, you'd use a server-side route or a SECURITY DEFINER RPC.
   // For this demo/MVP, we'll try to use the RPC if it exists, or just log it.
   const { error } = await supabase.rpc('platform_reset_password', { 
     target_user_id: authUserId, 
-    new_password: newPassword 
+    new_password: passwordToSet 
   });
   if (error) {
     console.error("Password reset RPC failed. Ensure platform_reset_password RPC exists.", error);
     throw new Error("Password reset failed. Administrative privileges required.");
   }
   await logPlatformActivity('PASSWORD_RESET', `Reset password for user: ${authUserId}`);
+}
+
+export async function verifyPortalSession(token) {
+  if (!token) return { valid: false, error: 'No session token.' };
+  try {
+    const { data, error } = await supabase.rpc('portal_verify_session', { p_token: token });
+    if (error || !data || !data.valid) {
+      return { valid: false, error: data?.error || error?.message || 'Invalid session.' };
+    }
+    return data;
+  } catch (err) {
+    return { valid: false, error: err.message };
+  }
+}
+
+export async function logoutPortalSession(token) {
+  if (!token) return;
+  try {
+    await supabase.rpc('portal_logout', { p_token: token });
+  } catch (err) {
+    console.warn('[AUTH] Logout RPC error:', err);
+  }
 }

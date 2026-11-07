@@ -8,3 +8,18 @@ if (!supabaseUrl || !supabaseAnonKey) {
 }
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+// Intercept RPC calls to inject portal session tokens for verified server-side session checks
+const originalRpc = supabase.rpc.bind(supabase);
+supabase.rpc = async (fn, args = {}, options) => {
+  const safeArgs = args ? { ...args } : {};
+  if (fn.startsWith('portal_') && fn !== 'portal_has_feature' && !fn.includes('login')) {
+    if (!safeArgs.p_token) {
+      const token = localStorage.getItem('Termly_Portal_Token') || localStorage.getItem('Termly_Staff_Token');
+      if (token) {
+        safeArgs.p_token = token;
+      }
+    }
+  }
+  return originalRpc(fn, safeArgs, options);
+};

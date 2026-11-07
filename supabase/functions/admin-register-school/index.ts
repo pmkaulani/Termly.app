@@ -14,9 +14,20 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+const allowedOrigins = [
+  'https://termly.com',
+  'http://localhost:5173',
+  'capacitor://localhost',
+  'app://.'
+];
+
+function getCorsHeaders(req) {
+  const origin = req.headers.get('origin');
+  const allowedOrigin = allowedOrigins.includes(origin) ? origin : 'https://termly.com';
+  return {
+    'Access-Control-Allow-Origin': allowedOrigin,
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  };
 }
 
 function generateTempPassword() {
@@ -33,7 +44,7 @@ function generateTempPassword() {
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
+    return new Response('ok', { headers: getCorsHeaders(req) })
   }
 
   try {
@@ -47,7 +58,7 @@ serve(async (req) => {
     const { data: { user }, error: authError } = await supabaseClient.auth.getUser()
     if (authError || !user) {
       return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 401,
+        headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }, status: 401,
       })
     }
 
@@ -60,7 +71,7 @@ serve(async (req) => {
       .from('platform_admins').select('email').eq('email', user.email).single()
     if (checkError || !adminCheck) {
       return new Response(JSON.stringify({ error: 'Forbidden: Not a Platform Admin' }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 403,
+        headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }, status: 403,
       })
     }
 
@@ -68,7 +79,7 @@ serve(async (req) => {
     const { schoolName, adminName, adminEmail, phone, location, curriculum, demoRequestId } = await req.json();
     if (!schoolName || !adminName || !adminEmail) {
       return new Response(JSON.stringify({ error: 'schoolName, adminName, and adminEmail are required' }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400,
+        headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }, status: 400,
       })
     }
 
@@ -86,7 +97,7 @@ serve(async (req) => {
     });
     if (createUserError) {
       return new Response(JSON.stringify({ error: `Could not create admin account: ${createUserError.message}` }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400,
+        headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }, status: 400,
       })
     }
 
@@ -110,7 +121,7 @@ serve(async (req) => {
       // this clearly rather than silently leaving an orphaned account.
       return new Response(JSON.stringify({
         error: `Admin account created, but school registration failed: ${registerError.message}. The auth user (${adminEmail}) exists — check for it before retrying, to avoid a duplicate.`
-      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 })
+      }), { headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }, status: 500 })
     }
 
     // 5. Mark the demo request as registered, if this came from one.
@@ -123,11 +134,11 @@ serve(async (req) => {
       tempPassword,
       adminEmail,
       school: schoolData,
-    }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
+    }), { headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }, status: 200 })
 
   } catch (error) {
     return new Response(JSON.stringify({ error: error.message }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400,
+      headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }, status: 400,
     })
   }
 })

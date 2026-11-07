@@ -767,9 +767,9 @@ export async function deleteSchool(schoolId) {
   // Delete child data first
   const tables = ['teacher_assignments', 'class_streams', 'subject_assignments', 'core_competencies',
     'cbc_assessments', 'attendance', 'marks', 'fees', 'students', 'teachers', 'school_features', 'school_profiles'];
-  for (const t of tables) {
-    await supabase.from(t).delete().eq('school_id', schoolId);
-  }
+  
+  await Promise.all(tables.map(t => supabase.from(t).delete().eq('school_id', schoolId)));
+  
   const { error } = await supabase.from('schools').delete().eq('id', schoolId);
   if (error) throw error;
   await logPlatformActivity('SCHOOL_DELETED', `School ${schoolId} permanently deleted`, schoolId);
@@ -779,9 +779,7 @@ export async function wipeAllNonAdminSchools() {
   mutationGuard('wipeAllNonAdminSchools');
   const { data: schools } = await supabase.from('schools').select('id, plan');
   const toDelete = (schools || []).filter(s => s.plan !== 'Platform Admin');
-  for (const s of toDelete) {
-    await deleteSchool(s.id);
-  }
+  await Promise.all(toDelete.map(s => deleteSchool(s.id)));
   return toDelete.length;
 }
 
@@ -806,9 +804,7 @@ export async function resetAllData() {
   if (!_currentSchoolId) return;
   const tables = ['teacher_assignments', 'class_streams', 'subject_assignments', 'core_competencies',
     'cbc_assessments', 'attendance', 'marks', 'fees', 'students', 'teachers'];
-  for (const t of tables) {
-    await supabase.from(t).delete().eq('school_id', _currentSchoolId);
-  }
+  await Promise.all(tables.map(t => supabase.from(t).delete().eq('school_id', _currentSchoolId)));
 }
 
 export async function exportData(selectedModules = null) {
@@ -953,9 +949,7 @@ export async function getSchemaStatus() {
 }
 
 export async function runSchemaMigration(sql) {
-  const { data, error } = await supabase.rpc('run_schema_migration', { p_sql: sql });
-  if (error) throw error;
-  return data;
+  throw new Error("Direct client-side schema migrations are disabled for security. Please use the Supabase CLI.");
 }
 
 // ============= PRINT HELPERS =============

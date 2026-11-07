@@ -66,11 +66,11 @@ if (import.meta.env.VITE_SENTRY_DSN) {
     integrations: [
       Sentry.browserTracingIntegration(),
       Sentry.replayIntegration({
-        maskAllText: false,
+        maskAllText: true,
         blockAllMedia: false,
       }),
     ],
-    tracesSampleRate: 1.0, 
+    tracesSampleRate: 0.1, 
     replaysSessionSampleRate: 0.1,
     replaysOnErrorSampleRate: 1.0,
   });

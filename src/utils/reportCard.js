@@ -1,36 +1,27 @@
-import { getPrintHeader } from '../data/coreStore';;
+import { getPrintHeader } from '../data/coreStore';
+import { getGradeForScore } from './assessmentCalculations';
 
 /**
- * CBC Competency Scale Helper
- * 4 = EE (Exceeding Expectations) [80-100%]
- * 3 = ME (Meeting Expectations)   [60-79%]
- * 2 = AE (Approaching Expectations) [40-59%]
- * 1 = BE (Below Expectations)     [0-39%]
+ * CBC Competency Scale Helper - delegated to centralized engine
  */
 export function getCBCCompetency(score) {
-  const num = Number(score) || 0;
-  if (num >= 80) return { code: 'EE', name: 'Exceeding Expectations', rating: 4, color: '#10b981', badgeBg: '#dcfce7', textHex: '#15803d' };
-  if (num >= 60) return { code: 'ME', name: 'Meeting Expectations', rating: 3, color: '#3b82f6', badgeBg: '#dbeafe', textHex: '#1e40af' };
-  if (num >= 40) return { code: 'AE', name: 'Approaching Expectations', rating: 2, color: '#f59e0b', badgeBg: '#fef3c7', textHex: '#92400e' };
-  return { code: 'BE', name: 'Below Expectations', rating: 1, color: '#ef4444', badgeBg: '#fee2e2', textHex: '#991b1b' };
+  const g = getGradeForScore(score, { isCbc: true });
+  return {
+    code: g.grade,
+    name: g.remarks,
+    rating: g.points || 1,
+    color: g.color || '#3b82f6',
+    badgeBg: g.badgeBg || '#dbeafe',
+    textHex: g.color || '#1e40af'
+  };
 }
 
-export function getGrade(s) {
-  const num = Number(s) || 0;
-  if (num >= 80) return 'A';
-  if (num >= 70) return 'B';
-  if (num >= 60) return 'C';
-  if (num >= 50) return 'D';
-  return 'E';
+export function getGrade(s, className = '', profile = null) {
+  return getGradeForScore(s, { className, profile }).grade;
 }
 
-export function getRemarks(s) {
-  const num = Number(s) || 0;
-  if (num >= 80) return 'Exceeding Expectations';
-  if (num >= 70) return 'Meeting Expectations';
-  if (num >= 60) return 'Good Progress';
-  if (num >= 50) return 'Approaching Expectations';
-  return 'Requires Learning Support';
+export function getRemarks(s, className = '', profile = null) {
+  return getGradeForScore(s, { className, profile }).remarks;
 }
 
 /**
@@ -38,7 +29,7 @@ export function getRemarks(s) {
  */
 export async function generateReportCard(student, marks = {}, summary = {}, profile = {}, options = {}) {
   const { isDraft = false } = options;
-  const header = await getPrintHeader(`Report Card — ${profile.term || 'Term 1'} ${profile.year || '2024'}`);
+  const header = await getPrintHeader(`Report Card — ${options?.term || summary?.term || profile?.term || 'Term'} ${options?.year || summary?.year || profile?.year || new Date().getFullYear().toString()}`);
   const w = window.open('', '_blank');
   
   const subjects = Object.keys(marks);
@@ -117,8 +108,8 @@ export async function generateReportCard(student, marks = {}, summary = {}, prof
             <td><strong>${s}</strong></td>
             <td class="score">${val}%</td>
             <td><span class="cbc-badge" style="background:${cbc.badgeBg}; color:${cbc.textHex}">${cbc.code} — ${cbc.name}</span></td>
-            <td><strong>${getGrade(val)}</strong></td>
-            <td>${getRemarks(val)}</td>
+            <td><strong>${getGrade(val, student.class, profile)}</strong></td>
+            <td>${getRemarks(val, student.class, profile)}</td>
           </tr>`;
         }).join('')}
       </tbody>
@@ -127,7 +118,7 @@ export async function generateReportCard(student, marks = {}, summary = {}, prof
     <div class="summary-box">
       <div class="sum-item"><span class="sum-val">${total}</span><span class="sum-lab">Total Marks</span></div>
       <div class="sum-item"><span class="sum-val">${average}%</span><span class="sum-lab">Average Score</span></div>
-      <div class="sum-item"><span class="sum-val">${getGrade(average)}</span><span class="sum-lab">Mean Grade</span></div>
+      <div class="sum-item"><span class="sum-val">${getGrade(average, student.class, profile)}</span><span class="sum-lab">Mean Grade</span></div>
       <div class="sum-item"><span class="sum-val" style="color:${cbcOverall.textHex}">${cbcOverall.code}</span><span class="sum-lab">CBC Competency</span></div>
     </div>
 
@@ -166,7 +157,7 @@ export async function downloadReportCardPDF(student, marks = {}, summary = {}, p
 
   doc.setFontSize(12);
   doc.setTextColor(100, 116, 139);
-  doc.text(`Official Report Card — ${profile.term || 'Term 1'} ${profile.year || '2024'}`, 105, 28, { align: 'center' });
+  doc.text(`Official Report Card — ${options?.term || summary?.term || profile?.term || 'Term'} ${options?.year || summary?.year || profile?.year || new Date().getFullYear().toString()}`, 105, 28, { align: 'center' });
 
   // Student Info Block
   doc.setFontSize(10);
@@ -181,7 +172,7 @@ export async function downloadReportCardPDF(student, marks = {}, summary = {}, p
   const tableRows = subjects.map(s => {
     const val = marks[s];
     const cbc = getCBCCompetency(val);
-    return [s, `${val}%`, `${cbc.code} (${cbc.name})`, getGrade(val), getRemarks(val)];
+    return [s, `${val}%`, `${cbc.code} (${cbc.name})`, getGrade(val, student.class, profile), getRemarks(val, student.class, profile)];
   });
 
   if (doc.autoTable) {
@@ -198,11 +189,86 @@ export async function downloadReportCardPDF(student, marks = {}, summary = {}, p
   const finalY = doc.lastAutoTable ? doc.lastAutoTable.finalY + 12 : 140;
   doc.setFontSize(10);
   doc.setFont(undefined, 'bold');
-  doc.text(`Total Marks: ${total} | Average: ${average}% | Grade: ${getGrade(average)} | CBC Competency: ${cbcOverall.code}`, 14, finalY);
+  doc.text(`Total Marks: ${total} | Average: ${average}% | Grade: ${getGrade(average, student.class, profile)} | CBC Competency: ${cbcOverall.code}`, 14, finalY);
 
   doc.setFont(undefined, 'normal');
   doc.text(`Class Teacher Remarks: ${summary.teacherComments || 'Good effort across learning areas.'}`, 14, finalY + 12);
   doc.text(`Head Teacher Remarks: ${summary.headComments || 'Approved.'}`, 14, finalY + 20);
 
   doc.save(`Report_Card_${student.name.replace(/\s+/g, '_')}.pdf`);
+}
+
+/**
+ * Generate CBC report card as a downloadable PDF file via jsPDF
+ */
+export async function downloadCBCReportCardPDF(student, cbcProgress = [], summary = {}, profile = {}, options = {}) {
+  const { jsPDF } = await import('jspdf');
+  await import('jspdf-autotable');
+
+  const doc = new jsPDF();
+
+  // Title Header
+  doc.setFontSize(18);
+  doc.setTextColor(15, 23, 42);
+  doc.text(profile.schoolName || 'Termly Academy', 105, 20, { align: 'center' });
+
+  doc.setFontSize(12);
+  doc.setTextColor(100, 116, 139);
+  doc.text(`CBC Official Progress Report — ${options?.term || summary?.term || profile?.term || 'Term'} ${options?.year || summary?.year || profile?.year || new Date().getFullYear().toString()}`, 105, 28, { align: 'center' });
+
+  // Student Info Block
+  doc.setFontSize(10);
+  doc.setTextColor(30, 41, 59);
+  doc.rect(14, 34, 182, 22);
+  doc.text(`Student Name: ${student.name}`, 18, 42);
+  doc.text(`Admission No: ${student.admNo || student.adm_no || 'N/A'}`, 120, 42);
+  doc.text(`Class: ${student.class || ''} ${student.stream || ''}`, 18, 50);
+  doc.text(`Gender: ${student.gender || '—'}`, 120, 50);
+
+  // Legend
+  doc.setFontSize(9);
+  doc.setTextColor(71, 85, 105);
+  doc.text('Legend:', 14, 62);
+  doc.text('EE: Exceeding Expectations | ME: Meeting Expectations | AE: Approaching Expectations | BE: Below Expectations', 30, 62);
+
+  // AutoTable for Subject Scores
+  const tableRows = cbcProgress.map(comp => {
+    const band = comp.level || '—';
+    let meaning = '—';
+    if (band.startsWith('EE')) meaning = 'Exceeding Expectations';
+    if (band.startsWith('ME')) meaning = 'Meeting Expectations';
+    if (band.startsWith('AE')) meaning = 'Approaching Expectations';
+    if (band.startsWith('BE')) meaning = 'Below Expectations';
+
+    return [comp.subject, band, meaning];
+  });
+
+  if (doc.autoTable) {
+    doc.autoTable({
+      startY: 66,
+      head: [['Learning Area', 'Competency Band', 'Meaning']],
+      body: tableRows,
+      theme: 'grid',
+      headStyles: { fillColor: [15, 23, 42], textColor: 255, fontStyle: 'bold' },
+      styles: { fontSize: 10, cellPadding: 6 },
+      willDrawCell: function(data) {
+        if (data.section === 'body' && data.column.index === 1) {
+          const val = data.cell.raw;
+          if (val.startsWith('EE')) { data.cell.styles.textColor = [21, 128, 61]; data.cell.styles.fontStyle = 'bold'; }
+          if (val.startsWith('ME')) { data.cell.styles.textColor = [30, 64, 175]; data.cell.styles.fontStyle = 'bold'; }
+          if (val.startsWith('AE')) { data.cell.styles.textColor = [146, 64, 14]; data.cell.styles.fontStyle = 'bold'; }
+          if (val.startsWith('BE')) { data.cell.styles.textColor = [153, 27, 27]; data.cell.styles.fontStyle = 'bold'; }
+        }
+      }
+    });
+  }
+
+  const finalY = doc.lastAutoTable ? doc.lastAutoTable.finalY + 12 : 140;
+  
+  doc.setFontSize(10);
+  doc.setTextColor(30, 41, 59);
+  doc.text(`Class Teacher Remarks: ${summary.teacherComments || 'Consistent effort. Keep up the good work.'}`, 14, finalY);
+  doc.text(`Head Teacher Remarks: ${summary.headComments || 'Approved.'}`, 14, finalY + 10);
+
+  doc.save(`CBC_Report_${student.name.replace(/\s+/g, '_')}.pdf`);
 }

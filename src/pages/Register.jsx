@@ -36,7 +36,7 @@ export default function Register() {
     phone: '',
     location: '',
     curriculum: 'CBC Only', 
-    termsAccepted: true // Auto-accept terms for smoother PLG flow
+    termsAccepted: false // L-5: Do not auto-accept terms for KDPA compliance
   });
 
   useEffect(() => {
@@ -74,7 +74,9 @@ export default function Register() {
   // 2. Persistence: Save state to sessionStorage when it changes
   useEffect(() => {
     if (step < 3) {
-      sessionStorage.setItem('Termly_reg_form', JSON.stringify(formData));
+      // Exclude sensitive fields like password
+      const { password, ...safeData } = formData;
+      sessionStorage.setItem('Termly_reg_form', JSON.stringify(safeData));
       sessionStorage.setItem('Termly_reg_step', step.toString());
     } else {
       // Clear storage on success or if we reach the end
