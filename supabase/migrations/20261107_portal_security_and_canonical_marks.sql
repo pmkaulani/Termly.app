@@ -9,10 +9,10 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 -- 1. Portal Sessions Table
 -- ------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.portal_sessions (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id UUID DEFAULT gen_random_uuid(),
   token UUID UNIQUE NOT NULL DEFAULT gen_random_uuid(),
   school_id UUID NOT NULL REFERENCES public.schools(id) ON DELETE CASCADE,
-  role TEXT NOT NULL CHECK (role IN ('parent', 'teacher', 'admin')),
+  role TEXT NOT NULL DEFAULT 'parent' CHECK (role IN ('parent', 'teacher', 'admin')),
   entity_id UUID NOT NULL, -- student_id (for parent) or teacher_id (for teacher)
   user_id UUID,            -- user_id in public.users if linked
   parent_phone TEXT,       -- normalized parent phone for family linkage
@@ -21,6 +21,45 @@ CREATE TABLE IF NOT EXISTS public.portal_sessions (
   revoked BOOLEAN NOT NULL DEFAULT false,
   last_active_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Ensure all columns exist even if portal_sessions was created by a previous migration
+ALTER TABLE public.portal_sessions ADD COLUMN IF NOT EXISTS id UUID DEFAULT gen_random_uuid();
+ALTER TABLE public.portal_sessions ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'parent';
+ALTER TABLE public.portal_sessions ADD COLUMN IF NOT EXISTS user_id UUID;
+ALTER TABLE public.portal_sessions ADD COLUMN IF NOT EXISTS parent_phone TEXT;
+ALTER TABLE public.portal_sessions ADD COLUMN IF NOT EXISTS revoked BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE public.portal_sessions ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+-- Migrate entity_type to role if coming from legacy 20260816 migration
+DO $
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'portal_sessions' AND column_name = 'entity_type') THEN
+    UPDATE public.portal_sessions 
+    SET role = CASE WHEN entity_type = 'student' THEN 'parent' ELSE entity_type END 
+    WHERE role IS NULL;
+  END IF;
+END;
+$;
+
+-- Ensure schema prerequisites on teachers, students, exam_marks, and exam_papers
+ALTER TABLE public.teachers ADD COLUMN IF NOT EXISTS pin TEXT;
+ALTER TABLE public.teachers ADD COLUMN IF NOT EXISTS on_leave BOOLEAN DEFAULT false;
+ALTER TABLE public.teachers ADD COLUMN IF NOT EXISTS staff_no TEXT;
+ALTER TABLE public.teachers ADD COLUMN IF NOT EXISTS user_id UUID;
+
+ALTER TABLE public.students ADD COLUMN IF NOT EXISTS parent_phone TEXT;
+ALTER TABLE public.students ADD COLUMN IF NOT EXISTS residence_type TEXT DEFAULT 'day';
+
+ALTER TABLE public.exam_papers ADD COLUMN IF NOT EXISTS max_score NUMERIC DEFAULT 100;
+ALTER TABLE public.exam_papers ADD COLUMN IF NOT EXISTS out_of NUMERIC DEFAULT 100;
+ALTER TABLE public.exam_papers ADD COLUMN IF NOT EXISTS teacher_id UUID;
+
+ALTER TABLE public.exam_marks ADD COLUMN IF NOT EXISTS school_id UUID;
+ALTER TABLE public.exam_marks ADD COLUMN IF NOT EXISTS raw_score NUMERIC;
+ALTER TABLE public.exam_marks ADD COLUMN IF NOT EXISTS is_absent BOOLEAN DEFAULT false;
+ALTER TABLE public.exam_marks ADD COLUMN IF NOT EXISTS entered_by UUID;
+ALTER TABLE public.exam_marks ADD COLUMN IF NOT EXISTS entered_at TIMESTAMPTZ DEFAULT now();
+ALTER TABLE public.exam_marks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS idx_portal_sessions_token ON public.portal_sessions(token);
 CREATE INDEX IF NOT EXISTS idx_portal_sessions_lookup ON public.portal_sessions(token, revoked, expires_at);
