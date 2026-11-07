@@ -411,6 +411,9 @@ $$;
 -- ------------------------------------------------------------------------------
 -- 5. Session Verification and Invalidation RPCs
 -- ------------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS public.portal_verify_session(UUID);
+DROP FUNCTION IF EXISTS public.portal_verify_session(text);
+
 CREATE OR REPLACE FUNCTION public.portal_verify_session(p_token UUID)
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -484,6 +487,9 @@ BEGIN
 END;
 $$;
 
+DROP FUNCTION IF EXISTS public.portal_logout(UUID);
+DROP FUNCTION IF EXISTS public.portal_logout(text);
+
 CREATE OR REPLACE FUNCTION public.portal_logout(p_token UUID)
 RETURNS BOOLEAN
 LANGUAGE plpgsql
@@ -501,6 +507,9 @@ $$;
 -- ------------------------------------------------------------------------------
 -- 6. Helper: Validate Authorization for Private RPCs
 -- ------------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS public.validate_portal_parent_access(UUID, UUID);
+DROP FUNCTION IF EXISTS public.validate_portal_parent_access(UUID, UUID, UUID);
+
 CREATE OR REPLACE FUNCTION public.validate_portal_parent_access(p_token UUID, p_student_id UUID)
 RETURNS BOOLEAN
 LANGUAGE plpgsql
@@ -541,6 +550,10 @@ BEGIN
   RETURN (v_student_phone = v_session.parent_phone OR p_student_id = v_session.entity_id);
 END;
 $$;
+
+DROP FUNCTION IF EXISTS public.validate_portal_teacher_access(UUID);
+DROP FUNCTION IF EXISTS public.validate_portal_teacher_access(UUID, UUID);
+DROP FUNCTION IF EXISTS public.validate_portal_teacher_access(UUID, UUID, UUID);
 
 CREATE OR REPLACE FUNCTION public.validate_portal_teacher_access(p_token UUID, p_teacher_id UUID DEFAULT NULL)
 RETURNS BOOLEAN
@@ -737,6 +750,10 @@ END;
 $$;
 
 -- 7.5 Student E-Learning Assignments
+DROP FUNCTION IF EXISTS public.portal_get_student_assignments(UUID);
+DROP FUNCTION IF EXISTS public.portal_get_student_assignments(UUID, UUID);
+DROP FUNCTION IF EXISTS public.portal_get_student_assignments(UUID, UUID, UUID);
+
 CREATE OR REPLACE FUNCTION public.portal_get_student_assignments(
   p_student_id UUID,
   p_token UUID DEFAULT NULL
@@ -797,6 +814,9 @@ $$;
 -- ------------------------------------------------------------------------------
 
 -- 8.1 Get Open Exams for Authenticated Teacher
+DROP FUNCTION IF EXISTS public.portal_get_open_exams_for_teacher();
+DROP FUNCTION IF EXISTS public.portal_get_open_exams_for_teacher(UUID);
+
 CREATE OR REPLACE FUNCTION public.portal_get_open_exams_for_teacher(p_token UUID)
 RETURNS JSONB
 LANGUAGE plpgsql
