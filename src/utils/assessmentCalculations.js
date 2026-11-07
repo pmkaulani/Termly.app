@@ -243,12 +243,13 @@ export function assignCompetitionRanks(items, primaryKey = 'total', secondaryKey
  * @param {object} profile School profile for grading
  * @returns {object} Calculated student result
  */
-export function calculateStudentSummary(student, marks = {}, subjects = [], subjectConfigs = {}, profile = null) {
+export function calculateStudentSummary(student, marks = {}, subjects = [], subjectConfigs = {}, profile = null, options = {}) {
   const cleanMarks = {};
   let totalRaw = 0;
   let totalPossibleMax = 0;
   let weightedSum = 0;
   let totalWeights = 0;
+  let enteredWeights = 0;
   let countEntered = 0;
   let countAbsent = 0;
   let countMissing = 0;
@@ -279,6 +280,7 @@ export function calculateStudentSummary(student, marks = {}, subjects = [], subj
     if (parsed.type === 'numeric') {
       totalRaw += parsed.value;
       weightedSum += parsed.percentage * weight;
+      enteredWeights += weight;
       countEntered++;
     } else if (parsed.type === 'abs') {
       countAbsent++;
@@ -289,13 +291,17 @@ export function calculateStudentSummary(student, marks = {}, subjects = [], subj
 
   const hasAnyActivity = countEntered > 0 || countAbsent > 0 || countMissing > 0;
 
-  // Calculate average percentage across all non-exempt enrolled subjects
+  // Blank marks stay blank and do NOT reduce an average as zero
   let averagePercentage = 0;
-  if (hasAnyActivity && totalWeights > 0) {
-    averagePercentage = Number((weightedSum / totalWeights).toFixed(1));
+  const divisor = (options && options.unenteredAsZero && totalWeights > 0)
+    ? totalWeights 
+    : (enteredWeights > 0 ? enteredWeights : totalWeights);
+
+  if (countEntered > 0 && divisor > 0) {
+    averagePercentage = Number((weightedSum / divisor).toFixed(1));
   }
 
-  const gradeInfo = hasAnyActivity
+  const gradeInfo = countEntered > 0
     ? getGradeForScore(averagePercentage, { className: student.class, profile })
     : { grade: '—', points: 0, remarks: 'Not Entered', color: '#94a3b8' };
 

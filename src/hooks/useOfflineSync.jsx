@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { getPendingSyncCount } from '../data/offlineStore';
+import { getPendingSyncCount, getUnsyncedDraftCount } from '../data/offlineStore';
 import { triggerSync } from '../data/syncStore';
 
 /**
@@ -20,8 +20,9 @@ export function useOfflineSync({ autoSync = true, debounceMs = 2000 } = {}) {
   // Refresh pending count
   const refreshPendingCount = useCallback(async () => {
     try {
-      const count = await getPendingSyncCount();
-      if (mountedRef.current) setPendingCount(count);
+      const qCount = await getPendingSyncCount();
+      const dCount = await getUnsyncedDraftCount();
+      if (mountedRef.current) setPendingCount(qCount + dCount);
     } catch (e) {
       // Silent — offline or DB error
     }
@@ -106,12 +107,22 @@ export function useOfflineSync({ autoSync = true, debounceMs = 2000 } = {}) {
     return () => clearInterval(interval);
   }, [refreshPendingCount]);
 
+  const getSyncState = useCallback(() => {
+    if (!isOnline) return { status: 'saved_device', label: 'Saved on this device' };
+    if (isSyncing) return { status: 'syncing', label: 'Syncing' };
+    if (lastSyncResult?.error) return { status: 'failed', label: 'Sync failed' };
+    if (pendingCount > 0) return { status: 'waiting', label: 'Waiting to sync' };
+    return { status: 'synced', label: 'Synced to school database' };
+  }, [isOnline, isSyncing, lastSyncResult, pendingCount]);
+
   return {
     isOnline,
     pendingCount,
     isSyncing,
     lastSyncTime,
     lastSyncResult,
+    syncState: getSyncState().status,
+    syncLabel: getSyncState().label,
     syncNow,
     refreshPendingCount,
   };
@@ -154,7 +165,7 @@ export function OfflineSyncBadge({ isOnline, pendingCount, isSyncing, onSync }) 
   return (
     <span style={badgeStyle} onClick={onSync} title={isSyncing ? 'Syncing...' : !isOnline ? 'Offline' : `${pendingCount} pending`}>
       <span style={dotStyle} />
-      {isSyncing ? 'Syncing…' : !isOnline ? 'Offline' : `${pendingCount} pending`}
+      {isSyncing ? 'Syncing' : !isOnline ? 'Saved on this device' : pendingCount > 0 ? 'Waiting to sync' : 'Synced to school database'}
       <style>{`@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.3; } }`}</style>
     </span>
   );

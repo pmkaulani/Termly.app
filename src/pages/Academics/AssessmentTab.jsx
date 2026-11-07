@@ -3,6 +3,7 @@ import { Helmet } from 'react-helmet-async';
 import {
   getClassResults,
   setStudentAllMarks,
+  batchSaveMarks,
   getSubjectRankings,
   getClassList,
   getCBC,
@@ -176,7 +177,7 @@ export default function AssessmentTab({ currentUser, currentPeriodId }) {
     setSelectedSubject(subs[0] || '');
   };
 
-  // Autosave handler for MarksSpreadsheet
+  // Autosave handler for MarksSpreadsheet (Batch Upsert)
   const handleAutosaveMarks = useCallback(async (updatedMarks) => {
     if (!navigator.onLine) {
       setSavingStatus('offline');
@@ -185,11 +186,7 @@ export default function AssessmentTab({ currentUser, currentPeriodId }) {
 
     setSavingStatus('saving');
     try {
-      await Promise.all(
-        Object.entries(updatedMarks).map(([sid, marks]) =>
-          setStudentAllMarks(sid, marks, examType)
-        )
-      );
+      await batchSaveMarks(updatedMarks, examType);
       setSavingStatus('saved');
       setRawMarksMap(updatedMarks);
     } catch (err) {
@@ -1302,7 +1299,7 @@ function ReportCardModal({ student, cbcData, coreCompData, onClose, getGrade, cb
                   student,
                   student.rawMarks || student.marks || {},
                   { teacherComments: '', headComments: '' },
-                  { schoolName: profile?.schoolName || 'Termly Academy', term: examType, year: '2026' },
+                  { schoolName: profile?.schoolName || 'Termly Academy', term: currentExamObj?.term || examType, year: currentExamObj?.academic_year || profile?.academicYear || new Date().getFullYear().toString() },
                   { isDraft: false }
                 );
               }}

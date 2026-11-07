@@ -8,7 +8,7 @@ import {
 } from '../../components/CommonIcons';
 import { Helmet } from 'react-helmet-async';
 import { getAssignments, getStudentSubmissions } from '../../data/offlineStore';
-import { getStudentExamResults, getGradeForScore, getStudentProfile, getAnnouncements, getSubjectDetails, getStudentCBCProgress } from '../../data/academicsStore';
+import { getStudentExamResults, getGradeForScore, getStudentProfile, getAnnouncements, getSubjectDetails, getStudentCBCProgress, getPeriods, getStudentAssignments } from '../../data/academicsStore';
 import { generateReportCard, downloadReportCardPDF, downloadCBCReportCardPDF } from '../../utils/reportCard';
 import { printReceipt, printFeeStatement } from '../../utils/receiptPrint';
 import { getStudentBooks } from '../../data/libraryStore';
@@ -81,10 +81,8 @@ export default function PortalDashboard({ user, onLogout }) {
   const [activeTab, setActiveTab] = useState('home');
   const [lastSync, setLastSync] = useState(null);
   const [lang, setLang] = useState('en');
-  const [notifications, setNotifications] = useState([
-    { id: 1, title: 'Term 2 Fee Statement Released', message: 'Your fee balance for Term 2 has been updated. Tap to view details.', created_at: new Date().toISOString(), read_at: null },
-    { id: 2, title: 'Opener Exam Results Available', message: 'Opener assessment marks have been published by the academic department.', created_at: new Date(Date.now() - 86400000).toISOString(), read_at: new Date().toISOString() }
-  ]);
+  // Never display sample notices as if they were genuine school notifications.
+  const [notifications, setNotifications] = useState([]);
 
   const classInfo = formatClassStreamDisplay(localUser?.class, localUser?.stream);
 
@@ -182,7 +180,8 @@ export default function PortalDashboard({ user, onLogout }) {
         if (freshStudent && freshStudent.id === activeId) setLocalUser(freshStudent);
         setSubjectTeachers(teachers);
         
-        const asts = await getAssignments({}).catch(() => []);
+        // getAssignments expects a class-name string, not an object.
+        const asts = activeClass ? await getAssignments(activeClass).catch(() => []) : [];
         setAssignments(asts);
         setExamResults(examRes);
         setCbcProgress(cbcData);
@@ -705,7 +704,7 @@ export default function PortalDashboard({ user, onLogout }) {
                                 localUser,
                                 marks,
                                 { teacherComments: res.teacher_remarks || '', headComments: res.head_remarks || '' },
-                                { schoolName: schoolProfile?.schoolName, term: res.exams?.term, year: res.exams?.year || '2026' }
+                                { schoolName: schoolProfile?.schoolName, term: res.exams?.term, year: res.academic_year || res.exams?.academic_year || new Date().getFullYear().toString() }
                               );
                             }}
                             style={{

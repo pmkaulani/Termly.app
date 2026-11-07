@@ -171,28 +171,63 @@ export async function updateSubmissionGrade(submissionId, data) {
  * Save a grading draft to IndexedDB for offline-first grading.
  * Upserts based on [exam_paper_id + student_id].
  */
-export async function saveGradingDraft(paperId, studentId, teacherId, data) {
+export async function saveGradingDraft(paperId, studentId, teacherId, data, options = {}) {
   const existing = await db.grading_drafts
     .where('[exam_paper_id+student_id]')
     .equals([paperId, studentId])
     .first();
 
+  const idempotencyKey = `${paperId}_${studentId}_${data.score ?? 'null'}_${data.isAbsent ? '1' : '0'}`;
+
   const draft = {
     exam_paper_id: paperId,
     student_id: studentId,
     teacher_id: teacherId,
+    school_id: options.schoolId || null,
+    period_id: options.periodId || null,
     raw_score: data.score,
-    is_absent: data.isAbsent || false,
+    is_absent: Boolean(data.isAbsent),
     remarks: data.remarks || '',
-    synced: false,
+    idempotency_key: idempotencyKey,
+    version: (existing?.version || 0) + 1,
+    synced: 0,
+    client_timestamp: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
 
+  let id;
   if (existing) {
-    return await db.grading_drafts.update(existing.id, draft);
+    await db.grading_drafts.update(existing.id, draft);
+    id = existing.id;
   } else {
-    return await db.grading_drafts.add(draft);
+    id = await db.grading_drafts.add(draft);
   }
+
+  // Queue background sync item
+  if (options.queueSync !== false) {
+    try {
+      const existingQueueItem = await db.syncQueue
+        .where('type')
+        .equals(syncTypes.SYNC_GRADES)
+        .toArray();
+
+      const pendingForPaper = existingQueueItem.find(
+        q => q.status === 'pending' && q.payload?.exam_paper_id === paperId
+      );
+
+      if (!pendingForPaper) {
+        await queueChange(syncTypes.SYNC_GRADES, {
+          exam_paper_id: paperId,
+          teacher_id: teacherId,
+          idempotency_key: `${paperId}_${Date.now()}`
+        });
+      }
+    } catch (e) {
+      console.warn('Queue change exception:', e);
+    }
+  }
+
+  return id;
 }
 
 /**

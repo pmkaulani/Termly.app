@@ -29,7 +29,7 @@ export function getRemarks(s, className = '', profile = null) {
  */
 export async function generateReportCard(student, marks = {}, summary = {}, profile = {}, options = {}) {
   const { isDraft = false } = options;
-  const header = await getPrintHeader(`Report Card — ${profile.term || 'Term 1'} ${profile.year || '2024'}`);
+  const header = await getPrintHeader(`Report Card — ${options?.term || summary?.term || profile?.term || 'Term'} ${options?.year || summary?.year || profile?.year || new Date().getFullYear().toString()}`);
   const w = window.open('', '_blank');
   
   const subjects = Object.keys(marks);
@@ -157,7 +157,7 @@ export async function downloadReportCardPDF(student, marks = {}, summary = {}, p
 
   doc.setFontSize(12);
   doc.setTextColor(100, 116, 139);
-  doc.text(`Official Report Card — ${profile.term || 'Term 1'} ${profile.year || '2024'}`, 105, 28, { align: 'center' });
+  doc.text(`Official Report Card — ${options?.term || summary?.term || profile?.term || 'Term'} ${options?.year || summary?.year || profile?.year || new Date().getFullYear().toString()}`, 105, 28, { align: 'center' });
 
   // Student Info Block
   doc.setFontSize(10);
@@ -214,7 +214,7 @@ export async function downloadCBCReportCardPDF(student, cbcProgress = [], summar
 
   doc.setFontSize(12);
   doc.setTextColor(100, 116, 139);
-  doc.text(`CBC Official Progress Report — ${profile.term || 'Term 1'} ${profile.year || '2024'}`, 105, 28, { align: 'center' });
+  doc.text(`CBC Official Progress Report — ${options?.term || summary?.term || profile?.term || 'Term'} ${options?.year || summary?.year || profile?.year || new Date().getFullYear().toString()}`, 105, 28, { align: 'center' });
 
   // Student Info Block
   doc.setFontSize(10);

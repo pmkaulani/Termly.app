@@ -210,6 +210,57 @@ export async function setStudentAllMarks(studentId, subjectMarks, examType = _cu
   invalidateCache(`marks_${_currentSchoolId}_${_currentPeriodId}_${examType}`);
 }
 
+export async function batchSaveMarks(marksMap, examType = _currentExamType, reason = '') {
+  mutationGuard('batchSaveMarks');
+  if (!_currentSchoolId || !_currentPeriodId) return;
+
+  const userRecord = await getUserByAuthId(_currentAuthUser?.id);
+  const creatorId = userRecord?.id || _currentUserId;
+
+  const allRows = [];
+  for (const [studentId, subjectMarks] of Object.entries(marksMap || {})) {
+    for (const [subject, rawMark] of Object.entries(subjectMarks || {})) {
+      let dbMark = null;
+      if (rawMark === 'ABS') dbMark = -1;
+      else if (rawMark === 'MISSING') dbMark = -2;
+      else if (rawMark === 'EXEMPT') dbMark = -3;
+      else if (rawMark !== null && rawMark !== undefined && rawMark !== '') {
+        const num = Number(rawMark);
+        dbMark = isNaN(num) ? null : num;
+      }
+
+      allRows.push({
+        school_id: _currentSchoolId,
+        student_id: studentId,
+        subject,
+        mark: dbMark,
+        period_id: _currentPeriodId,
+        exam_type: examType,
+        created_by: creatorId
+      });
+    }
+  }
+
+  if (allRows.length === 0) return;
+
+  const { error } = await supabase
+    .from('marks')
+    .upsert(allRows, { onConflict: 'school_id,student_id,subject,period_id,exam_type' });
+
+  if (error) {
+    console.error('[STORE] Failed to batch save marks:', error);
+    throw error;
+  }
+
+  logAuditEvent('batch_marks_updated', 'marks', _currentSchoolId, {
+    examType,
+    rowCount: allRows.length,
+    reason
+  });
+
+  invalidateCache(`marks_${_currentSchoolId}_${_currentPeriodId}_${examType}`);
+}
+
 export async function getClassResults(className, examType = _currentExamType) {
   const students = (await getStudents()).filter(s => s.class === className);
   const marks = await getMarks(examType);
@@ -237,7 +288,7 @@ export async function getSubjectRankings(className, examType = _currentExamType)
       .filter(s => !s.subjects || s.subjects.length === 0 || s.subjects.includes(sub))
       .map(s => {
         const raw = (marks[s.id] || {})[sub];
-        const num = typeof raw === 'number' ? raw : (raw === 'ABS' || raw === 'MISSING' ? 0 : null);
+        const num = typeof raw === 'number' ? raw : null;
         return {
           ...s,
           mark: raw !== undefined && raw !== null ? raw : '—',
@@ -610,16 +661,64 @@ export async function getExamPapers(examId) {
 }
 
 
-export async function saveExamMarks(paperId, marks) {
+export async function saveExamMarks(paperId, marks, virtualPaper = null) {
   mutationGuard('saveExamMarks');
-  if (!_currentAuthUser && _currentSchoolId) {
-    const portalMarks = marks.map(m => ({
-      ...m,
-      exam_paper_id: paperId,
-      school_id: _currentSchoolId
+  const token = localStorage.getItem('Termly_Staff_Token') || localStorage.getItem('Termly_Portal_Token');
+
+  if (virtualPaper) {
+    const subjectName = virtualPaper.tt_subjects?.name || virtualPaper._subject;
+    const className = virtualPaper.classes?.name || virtualPaper._className;
+    const examName = virtualPaper._examName || _currentExamType;
+
+    const classMarks = marks.map(m => ({
+      school_id: _currentSchoolId,
+      student_id: m.student_id,
+      subject: subjectName,
+      mark: m.is_absent ? -1 : (m.raw_score !== null && m.raw_score !== undefined ? Math.round(Number(m.raw_score)) : null),
+      exam_type: examName,
+      period_id: _currentPeriodId
     }));
-    const { data, error } = await supabase.rpc('portal_save_exam_marks', { p_marks: portalMarks });
-    if (error) throw error;
+
+    if (!_currentAuthUser && token) {
+      const { data, error } = await supabase.rpc('portal_save_class_marks', { p_marks: classMarks });
+      if (error) {
+        if (paperId && String(paperId).length === 36) {
+          const { data: d2, error: e2 } = await supabase.rpc('portal_save_exam_marks', {
+            p_paper_id: paperId,
+            p_marks: marks,
+            p_token: token
+          });
+          if (e2) throw e2;
+          return d2;
+        }
+        throw error;
+      }
+      return data;
+    } else {
+      const { error } = await supabase.from('marks').upsert(classMarks, {
+        onConflict: 'school_id,student_id,subject,period_id,exam_type'
+      });
+      if (error) throw error;
+      return { success: true, count: classMarks.length };
+    }
+  }
+
+  if (!_currentAuthUser && _currentSchoolId) {
+    const { data, error } = await supabase.rpc('portal_save_exam_marks', {
+      p_paper_id: paperId,
+      p_marks: marks,
+      p_token: token
+    });
+    if (error) {
+      const portalMarks = marks.map(m => ({
+        ...m,
+        exam_paper_id: paperId,
+        school_id: _currentSchoolId
+      }));
+      const { data: legData, error: legErr } = await supabase.rpc('portal_save_exam_marks', { p_marks: portalMarks });
+      if (legErr) throw error;
+      return legData;
+    }
     return data;
   }
 
@@ -634,6 +733,7 @@ export async function saveExamMarks(paperId, marks) {
     .from('exam_marks')
     .upsert(rows, { onConflict: 'exam_paper_id,student_id' });
   if (error) throw error;
+  return { success: true, count: rows.length };
 }
 
 export async function saveExamPapers(examId, papers) {
@@ -2233,13 +2333,58 @@ export async function promoteClasses() {
 }
 
 export async function getOpenExamsForTeacher() {
-  console.warn('[academicsStore] getOpenExamsForTeacher is not yet implemented');
-  return [];
+  const token = typeof localStorage !== 'undefined' ? (localStorage.getItem('Termly_Staff_Token') || localStorage.getItem('Termly_Portal_Token')) : null;
+  if (token) {
+    try {
+      const { data, error } = await supabase.rpc('portal_get_open_exams_for_teacher', { p_token: token });
+      if (!error && Array.isArray(data)) {
+        return data;
+      }
+    } catch (e) {
+      console.warn('[academicsStore] RPC portal_get_open_exams_for_teacher error, falling back:', e);
+    }
+  }
+
+  // Fallback for admin or direct authenticated mode
+  if (!_currentSchoolId) return [];
+  try {
+    const { data, error } = await supabase
+      .from('exams')
+      .select('*')
+      .eq('school_id', _currentSchoolId)
+      .in('status', ['open', 'active', 'in_progress'])
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return data || [];
+  } catch (err) {
+    console.error('[academicsStore] Failed to get open exams for teacher:', err);
+    return [];
+  }
 }
 
-export async function getVirtualPaperMarks() {
-  console.warn('[academicsStore] getVirtualPaperMarks is not yet implemented');
-  return [];
+export async function getVirtualPaperMarks(schoolId, className, subjectName, examName) {
+  const targetSchoolId = schoolId || _currentSchoolId;
+  if (!targetSchoolId) return [];
+  try {
+    let query = supabase
+      .from('marks')
+      .select('student_id, mark, is_absent')
+      .eq('school_id', targetSchoolId);
+
+    if (subjectName) query = query.eq('subject', subjectName);
+    if (examName) query = query.eq('exam_type', examName);
+
+    const { data, error } = await query;
+    if (error) throw error;
+    return (data || []).map(m => ({
+      student_id: m.student_id,
+      raw_score: m.mark === -1 ? null : m.mark,
+      is_absent: m.mark === -1 || !!m.is_absent
+    }));
+  } catch (err) {
+    console.error('[academicsStore] Failed to get virtual paper marks:', err);
+    return [];
+  }
 }
 
 export async function getTeacherAssignments() {
@@ -2316,3 +2461,19 @@ export async function getStudentCBCProgress(studentId) {
   }
 }
 
+
+
+export async function getStudentAssignments(studentId) {
+  if (!studentId) return [];
+  const token = localStorage.getItem('Termly_Portal_Token');
+  try {
+    const { data, error } = await supabase.rpc('portal_get_student_assignments', {
+      p_student_id: studentId,
+      p_token: token
+    });
+    if (!error && Array.isArray(data)) return data;
+    return [];
+  } catch (e) {
+    return [];
+  }
+}

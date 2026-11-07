@@ -410,6 +410,61 @@ export default function MarksSpreadsheet({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', width: '100%' }}>
+      {/* EXCEL-LIKE CONTEXT BAR & ACTIVE CELL NAME BOX */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: '8px',
+        padding: '8px 14px',
+        background: '#f8fafc',
+        borderRadius: '8px',
+        border: '1px solid #e2e8f0',
+        fontSize: '0.8rem',
+        marginBottom: '2px'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{
+            fontSize: '0.75rem',
+            fontWeight: 700,
+            textTransform: 'uppercase',
+            color: '#64748b'
+          }}>Name Box:</span>
+          <span style={{
+            fontFamily: 'monospace',
+            fontWeight: 800,
+            background: '#ffffff',
+            border: '1px solid #cbd5e1',
+            padding: '2px 8px',
+            borderRadius: '4px',
+            color: '#1e293b'
+          }}>
+            {activeCell ? `${String.fromCharCode(65 + Math.min((activeCell.colIdx || 0) + 3, 25))}${(activeCell.rowIdx || 0) + 1}` : 'A1'}
+          </span>
+          <span style={{ color: '#64748b', fontSize: '0.78rem' }}>
+            {activeCell && activeCell.subject ? `${activeCell.subject} — ${displayedStudents[activeCell.rowIdx]?.name || ''}` : 'Select a cell to edit mark'}
+          </span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', color: '#475569', fontWeight: 600, fontSize: '0.78rem' }}>
+          <span>🏛 {profile?.schoolName || 'Termly Academy'}</span>
+          <span>📅 {profile?.academicYear || '2026'}</span>
+          <span>📌 {selectedClass || 'All Classes'}</span>
+          <span style={{
+            padding: '2px 8px',
+            borderRadius: '4px',
+            fontSize: '0.72rem',
+            fontWeight: 700,
+            textTransform: 'uppercase',
+            background: isFinalized ? '#fef2f2' : '#f0fdf4',
+            color: isFinalized ? '#b91c1c' : '#15803d',
+            border: isFinalized ? '1px solid #fecaca' : '1px solid #bbf7d0'
+          }}>
+            {examStatus?.toUpperCase() || 'OPEN'}
+          </span>
+        </div>
+      </div>
+
       {/* Spreadsheet Controls Row — no extra card, flows beneath the main toolbar */}
       <div style={{
         display: 'flex',

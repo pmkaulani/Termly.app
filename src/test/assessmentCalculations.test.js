@@ -155,17 +155,22 @@ describe('Assessment Calculations Engine', () => {
       expect(summary.marks.Science.type).toBe('exempt');
     });
 
-    it('calculates curriculum average across all enrolled subjects when only some marks are entered', () => {
+    it('ensures blank marks stay blank and do not reduce an average as zero', () => {
       const student = { id: 's2', name: 'James Kino', class: 'Form 1' };
       const marks = { 'Kiswahili': 89 };
       const subjects = ['English', 'Kiswahili', 'Mathematics', 'Biology', 'Physics', 'Chemistry', 'History', 'Geography', 'CRE', 'Business'];
+      
+      // Default: blank marks stay blank, average is based on entered subjects (89% -> Grade A)
       const summary = calculateStudentSummary(student, marks, subjects, {});
-
       expect(summary.total).toBe(89);
       expect(summary.countEntered).toBe(1);
-      // 89 total marks across 10 enrolled subjects -> average 8.9%
-      expect(summary.average).toBe(8.9);
-      expect(summary.grade).toBe('E');
+      expect(summary.average).toBe(89);
+      expect(summary.grade).toBe('A');
+
+      // If explicitly configured to treat unentered as zero:
+      const zeroSummary = calculateStudentSummary(student, marks, subjects, {}, null, { unenteredAsZero: true });
+      expect(zeroSummary.average).toBe(8.9);
+      expect(zeroSummary.grade).toBe('E');
     });
 
     it('returns grade — when student has no marks entered at all', () => {

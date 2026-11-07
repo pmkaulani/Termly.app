@@ -3,17 +3,20 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 
 const allowedOrigins = [
   'https://termly.com',
+  'https://app.termly.school',
   'http://localhost:5173',
+  'http://localhost:3000',
   'capacitor://localhost',
   'app://.'
 ];
 
-function getCorsHeaders(req) {
-  const origin = req.headers.get('origin');
+function getCorsHeaders(req: Request) {
+  const origin = req.headers.get('origin') || '';
   const allowedOrigin = allowedOrigins.includes(origin) ? origin : 'https://termly.com';
   return {
     'Access-Control-Allow-Origin': allowedOrigin,
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-portal-token, x-session-token',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS'
   };
 }
 
@@ -39,14 +42,54 @@ serve(async (req) => {
   }
 
   try {
-    const supabaseClient = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      { global: { headers: { Authorization: req.headers.get('Authorization')! } } }
-    );
-    const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
-    if (authError || !user) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
+    const supabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: req.headers.get('Authorization') || '' } }
+    });
+
+    // 1. Authenticate the caller: either via Supabase Auth user or verified Portal Session Token
+    const portalToken = req.headers.get('x-portal-token') || req.headers.get('x-session-token');
+    let authenticatedSchoolId: string | null = null;
+    let authenticatedStudentId: string | null = null;
+    let callerRole: string = 'anon';
+
+    if (portalToken) {
+      const { data: session } = await supabaseAdmin
+        .from('portal_sessions')
+        .select('*')
+        .eq('token', portalToken)
+        .eq('revoked', false)
+        .gt('expires_at', new Date().toISOString())
+        .maybeSingle();
+
+      if (session) {
+        authenticatedSchoolId = session.school_id;
+        authenticatedStudentId = session.entity_id;
+        callerRole = session.role;
+      }
+    }
+
+    if (!authenticatedSchoolId) {
+      const { data: { user } } = await supabaseClient.auth.getUser();
+      if (user) {
+        const { data: userData } = await supabaseAdmin
+          .from('users')
+          .select('school_id, role')
+          .eq('auth_user_id', user.id)
+          .maybeSingle();
+        if (userData) {
+          authenticatedSchoolId = userData.school_id;
+          callerRole = userData.role || 'Admin';
+        }
+      }
+    }
+
+    if (!authenticatedSchoolId) {
+      return new Response(JSON.stringify({ error: 'Unauthorized: valid portal session or login required.' }), {
         status: 401,
         headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
       });
@@ -61,29 +104,94 @@ serve(async (req) => {
     const CALLBACK_URL = Deno.env.get('MPESA_CALLBACK_URL') ?? '';
     const ENVIRONMENT = Deno.env.get('MPESA_ENVIRONMENT') || 'sandbox';
 
-    if (!CONSUMER_KEY || CONSUMER_KEY === 'MOCK_KEY') {
-      if (action === 'push') {
-        const { phoneNumber, amount } = payload;
-        console.log(`[MPESA-MOCK] STK Push to ${phoneNumber} for KSh ${amount}`);
+    // 2. Action: Push (STK Push initiation)
+    if (action === 'push') {
+      const { phoneNumber, amount, accountRef, description, studentId } = payload;
+      const targetStudentId = studentId || authenticatedStudentId;
+
+      if (!targetStudentId) {
+        return new Response(JSON.stringify({ error: 'Student ID is required.' }), {
+          status: 400,
+          headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }
+        });
+      }
+
+      // Verify student belongs to this school
+      const { data: student, error: stuErr } = await supabaseAdmin
+        .from('students')
+        .select('id, name, adm_no, school_id, parent_phone')
+        .eq('id', targetStudentId)
+        .eq('school_id', authenticatedSchoolId)
+        .single();
+
+      if (stuErr || !student) {
+        return new Response(JSON.stringify({ error: 'Student not found in your institution.' }), {
+          status: 403,
+          headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }
+        });
+      }
+
+      // Validate payment amount bounds
+      const numAmount = Math.round(Number(amount));
+      if (isNaN(numAmount) || numAmount < 1 || numAmount > 150000) {
+        return new Response(JSON.stringify({ error: 'Invalid amount. Must be between KSh 1 and KSh 150,000.' }), {
+          status: 400,
+          headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }
+        });
+      }
+
+      // Validate phone number format (Kenyan MSISDN)
+      let cleanPhone = String(phoneNumber || '').replace(/[^0-9]/g, '');
+      if (cleanPhone.startsWith('0')) cleanPhone = '254' + cleanPhone.slice(1);
+      if (cleanPhone.length === 9) cleanPhone = '254' + cleanPhone;
+      if (!/^254(7|1)\d{8}$/.test(cleanPhone)) {
+        return new Response(JSON.stringify({ error: 'Invalid phone number. Format: 2547XXXXXXXX or 2541XXXXXXXX.' }), {
+          status: 400,
+          headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }
+        });
+      }
+
+      // Check against current fee ledger
+      const { data: feeRecord } = await supabaseAdmin
+        .from('fees')
+        .select('id, balance, total_fee')
+        .eq('student_id', targetStudentId)
+        .maybeSingle();
+
+      if (feeRecord && feeRecord.balance !== null && Number(feeRecord.balance) <= 0) {
+        return new Response(JSON.stringify({ error: 'Student fee balance is already settled.' }), {
+          status: 400,
+          headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }
+        });
+      }
+
+      // Mock mode for local/dev testing
+      if (!CONSUMER_KEY || CONSUMER_KEY === 'MOCK_KEY') {
+        const mockMerchant = 'MOCK-' + Date.now();
+        const mockCheckout = 'WS-' + Math.random().toString(36).substring(2, 9);
+        await supabaseAdmin.from('mpesa_callbacks').insert({
+          school_id: authenticatedSchoolId,
+          merchant_request_id: mockMerchant,
+          checkout_request_id: mockCheckout,
+          result_code: -1,
+          bill_ref_number: student.adm_no || student.id,
+          phone_number: cleanPhone,
+          amount: numAmount,
+          status: 'awaiting_callback',
+          created_at: new Date().toISOString()
+        });
+
         return new Response(
-          JSON.stringify({ success: true, MerchantRequestID: 'MOCK-' + Date.now(), CheckoutRequestID: 'WS-' + Math.random().toString(36).substr(2, 9) }),
-          { headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }, status: 200 }
-        );
-      } else {
-        return new Response(
-          JSON.stringify({ status: 'Pending' }),
+          JSON.stringify({ success: true, MerchantRequestID: mockMerchant, CheckoutRequestID: mockCheckout }),
           { headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }, status: 200 }
         );
       }
-    }
 
-    const token = await getOAuthToken(ENVIRONMENT, CONSUMER_KEY, CONSUMER_SECRET);
-    const timestamp = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
-    const password = btoa(`${SHORTCODE}${PASSKEY}${timestamp}`);
+      // Live Daraja STK Push
+      const token = await getOAuthToken(ENVIRONMENT, CONSUMER_KEY, CONSUMER_SECRET);
+      const timestamp = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
+      const password = btoa(`${SHORTCODE}${PASSKEY}${timestamp}`);
 
-    if (action === 'push') {
-      const { phoneNumber, amount, accountRef, description, schoolId } = payload;
-      
       const url = ENVIRONMENT === 'sandbox'
         ? 'https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest'
         : 'https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest';
@@ -99,49 +207,32 @@ serve(async (req) => {
           Password: password,
           Timestamp: timestamp,
           TransactionType: 'CustomerPayBillOnline',
-          Amount: Math.round(amount),
-          PartyA: phoneNumber,
+          Amount: numAmount,
+          PartyA: cleanPhone,
           PartyB: SHORTCODE,
-          PhoneNumber: phoneNumber,
+          PhoneNumber: cleanPhone,
           CallBackURL: CALLBACK_URL,
-          AccountReference: accountRef || 'Fees',
-          TransactionDesc: description || 'School Fees Payment'
+          AccountReference: student.adm_no || student.id,
+          TransactionDesc: description || `School Fees - ${student.name}`
         })
       });
 
       const result = await response.json();
       if (result.ResponseCode !== '0') {
-        throw new Error(result.ResponseDescription || 'STK Push Failed');
+        throw new Error(result.ResponseDescription || 'M-Pesa STK Push rejected.');
       }
 
-      // Without this row, an incoming callback has no way to know which
-      // school (or which student's fee account) it belongs to — Safaricom's
-      // callback payload only carries MerchantRequestID/CheckoutRequestID,
-      // nothing app-specific. This is what mpesa-callback matches against.
-      if (schoolId) {
-        const supabaseAdmin = createClient(
-          Deno.env.get('SUPABASE_URL') ?? '',
-          Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-        );
-        const { error: insertError } = await supabaseAdmin.from('mpesa_callbacks').insert({
-          school_id: schoolId,
-          merchant_request_id: result.MerchantRequestID,
-          checkout_request_id: result.CheckoutRequestID,
-          result_code: -1, // sentinel: no real result yet — column is NOT NULL, actual code arrives via mpesa-callback
-          bill_ref_number: accountRef || null,
-          phone_number: phoneNumber,
-          amount: Math.round(amount),
-          status: 'awaiting_callback',
-        });
-        if (insertError) {
-          // The push already went to the customer's phone — don't fail the
-          // request over this, but log it loudly, since a payment that
-          // completes now has nothing to reconcile against.
-          console.error('Could not create pending mpesa_callbacks row:', insertError.message);
-        }
-      } else {
-        console.error('mpesa-stk-push called without schoolId — callback for this payment cannot be matched to a school.');
-      }
+      await supabaseAdmin.from('mpesa_callbacks').insert({
+        school_id: authenticatedSchoolId,
+        merchant_request_id: result.MerchantRequestID,
+        checkout_request_id: result.CheckoutRequestID,
+        result_code: -1,
+        bill_ref_number: student.adm_no || student.id,
+        phone_number: cleanPhone,
+        amount: numAmount,
+        status: 'awaiting_callback',
+        created_at: new Date().toISOString()
+      });
 
       return new Response(
         JSON.stringify({
@@ -152,9 +243,36 @@ serve(async (req) => {
         }),
         { headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }, status: 200 }
       );
-    } else if (action === 'status') {
+    } 
+    // 3. Action: Status Query
+    else if (action === 'status') {
       const { checkoutRequestId } = payload;
       
+      const { data: cbRecord } = await supabaseAdmin
+        .from('mpesa_callbacks')
+        .select('*')
+        .eq('checkout_request_id', checkoutRequestId)
+        .eq('school_id', authenticatedSchoolId)
+        .maybeSingle();
+
+      if (!cbRecord) {
+        return new Response(JSON.stringify({ error: 'Transaction not found or access denied.' }), {
+          status: 403,
+          headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }
+        });
+      }
+
+      if (!CONSUMER_KEY || CONSUMER_KEY === 'MOCK_KEY') {
+        return new Response(
+          JSON.stringify({ status: cbRecord.status, result_code: cbRecord.result_code }),
+          { headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }, status: 200 }
+        );
+      }
+
+      const token = await getOAuthToken(ENVIRONMENT, CONSUMER_KEY, CONSUMER_SECRET);
+      const timestamp = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
+      const password = btoa(`${SHORTCODE}${PASSKEY}${timestamp}`);
+
       const url = ENVIRONMENT === 'sandbox'
         ? 'https://sandbox.safaricom.co.ke/mpesa/stkpushquery/v1/query'
         : 'https://api.safaricom.co.ke/mpesa/stkpushquery/v1/query';
@@ -181,13 +299,13 @@ serve(async (req) => {
     }
 
     return new Response(
-      JSON.stringify({ error: 'Invalid action' }),
+      JSON.stringify({ error: 'Invalid action specified.' }),
       { headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }, status: 400 }
     );
   } catch (error) {
     return new Response(JSON.stringify({ error: error.message }), {
       headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
       status: 400,
-    })
+    });
   }
-})
+});
