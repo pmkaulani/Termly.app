@@ -3,6 +3,9 @@
 -- File: supabase/migrations/20261107_deduplicate_records.sql
 -- ==============================================================================
 
+-- Ensure prerequisites
+ALTER TABLE public.exam_papers ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now();
+
 DO $$
 DECLARE
   v_marks_deleted INT := 0;
@@ -13,7 +16,7 @@ DECLARE
 BEGIN
   RAISE NOTICE 'Starting database deduplication cleanup...';
 
-  -- 1. Deduplicate legacy marks table (keeping latest by updated_at or ctid)
+  -- 1. Deduplicate legacy marks table (keeping latest entry by ctid)
   WITH deleted AS (
     DELETE FROM public.marks a
     USING public.marks b
@@ -45,7 +48,7 @@ BEGIN
   FROM (
     SELECT DISTINCT ON (exam_id, class_id, subject_id) id, exam_id, class_id, subject_id
     FROM public.exam_papers
-    ORDER BY exam_id, class_id, subject_id, created_at DESC
+    ORDER BY exam_id, class_id, subject_id, ctid DESC
   ) canonical
   JOIN public.exam_papers dup 
     ON dup.exam_id = canonical.exam_id 
