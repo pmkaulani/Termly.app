@@ -1,25 +1,36 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { bulkImportStudents } from '../../src/data/store';
+import { bulkImportStudents } from '../../src/data/studentStore';
 
 // Mock dependencies
-vi.mock('../../src/data/store', async (importOriginal) => {
-  const actual = await importOriginal();
-  return {
-    ...actual,
-    _currentSchoolId: 'test-school-123',
-    getSchoolProfile: vi.fn(),
-    mutationGuard: vi.fn(),
-  };
-});
+vi.mock('../../src/data/coreStore', () => ({
+  _currentSchoolId: 'test-school-123',
+  _currentPeriodId: 'test-period-123',
+  mutationGuard: vi.fn(),
+  getSchoolProfile: vi.fn().mockResolvedValue({ id: 'test-school-123', name: 'Test School', studentLimit: 500 }),
+  logPlatformActivity: vi.fn(),
+  logAuditEvent: vi.fn(),
+  getCurrentSchoolId: () => 'test-school-123',
+  shouldFetchCloud: () => false
+}));
+
+vi.mock('../../src/data/offlineStore', () => ({
+  db: {
+    students: {
+      bulkPut: vi.fn().mockResolvedValue(true),
+      put: vi.fn().mockResolvedValue(true),
+      update: vi.fn().mockResolvedValue(true),
+      where: () => ({ equals: () => ({ toArray: () => Promise.resolve([]) }) })
+    }
+  },
+  queueChange: vi.fn()
+}));
 
 vi.mock('../../src/lib/supabase', () => ({
   supabase: {
-    from: vi.fn(),
-    rpc: vi.fn()
+    from: vi.fn()
   }
 }));
 
-import { getSchoolProfile } from '../../src/data/store';
 import { supabase } from '../../src/lib/supabase';
 
 describe('Data Ingestion: bulkImportStudents', () => {
@@ -28,28 +39,32 @@ describe('Data Ingestion: bulkImportStudents', () => {
   });
 
   it('should deduplicate incoming rows by admission number', async () => {
-    getSchoolProfile.mockResolvedValue({ id: 'test-school-123', name: 'Test School' });
-
-    // Mock existing streams
     supabase.from.mockImplementation((table) => {
       const chain = {
         select: vi.fn().mockReturnThis(),
         eq: vi.fn().mockReturnThis(),
-        ilike: vi.fn().mockReturnThis(),
-        insert: vi.fn().mockReturnThis(),
-        update: vi.fn().mockReturnThis()
+        order: vi.fn().mockReturnThis(),
+        insert: vi.fn().mockResolvedValue({ data: [{ id: 's-1', name: 'John Doe' }, { id: 's-2', name: 'Jane Doe' }], error: null }),
+        update: vi.fn().mockResolvedValue({ error: null })
       };
       
-      if (table === 'class_streams') {
-        chain.eq = vi.fn().mockImplementation((col, val) => {
-          if (col === 'is_active' && val === true) return Promise.resolve({ data: [{ id: 'stream-1', level: 'Grade 1', name: 'Grade 1 North' }] });
+      if (table === 'students') {
+        chain.select = vi.fn().mockImplementation((cols, opts) => {
+          if (opts?.count === 'exact') {
+            return Promise.resolve({ count: 10, error: null });
+          }
           return chain;
         });
-      } else if (table === 'students') {
         chain.eq = vi.fn().mockImplementation((col, val) => {
-           // Simulate no existing students in DB
-           return Promise.resolve({ data: [] });
+          if (col === 'school_id') {
+            return {
+              order: () => Promise.resolve({ data: [], error: null }),
+              eq: () => Promise.resolve({ count: 10, error: null })
+            };
+          }
+          return chain;
         });
+      } else if (table === 'fees') {
         chain.insert = vi.fn().mockResolvedValue({ error: null });
       }
       return chain;

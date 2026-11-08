@@ -1,6 +1,10 @@
 import { useState, useEffect } from 'react';
 import { getTeachers, addTeacher, updateTeacher, deleteTeacher, getTeacherWorkload, getTeacherPerformance, setTeacherLeaveStatus, isStaffCodeAvailable } from '../data/staffStore';
 import { getPrintHeader, getPrintFooter, getSchoolProfile, getPlatformSettings } from '../data/coreStore';
+import Avatar from '../components/Common/Avatar';
+import ImageUploadField from '../components/Common/ImageUploadField';
+import TeacherImporter from '../components/TeacherImporter';
+import { uploadPersonPhoto, deletePersonPhoto } from '../lib/storageHelpers';
 import { getUsers } from '../data/authStore';
 import { getCurrentPeriodDetails } from '../data/academicsStore';
 import { getTeacherAssignments, assignTeacher, removeTeacherAssignment, getClassStreams, initializeStreams } from '../data/academicsStore';
@@ -23,6 +27,7 @@ export default function Teachers({ currentUser, currentPeriodId }) {
   const [assignments, setAssignments] = useState({});
   const [showModal, setShowModal] = useState(false);
   const [editingTeacher, setEditingTeacher] = useState(null);
+  const [showImporter, setShowImporter] = useState(false);
   const [search, setSearch] = useState('');
   const [profile, setProfile] = useState({ streams: [], activeClasses: [] });
   const [settings, setSettings] = useState({});
@@ -78,11 +83,46 @@ export default function Teachers({ currentUser, currentPeriodId }) {
       if (sanitized.staff_code) sanitized.staff_code = sanitizeString(sanitized.staff_code);
       if (sanitized.tsc_number) sanitized.tsc_number = sanitizeString(sanitized.tsc_number);
 
+      const schoolId = profile?.school_id || profile?.schoolId;
       if (editingTeacher) {
+        let photoPath = editingTeacher.photo_path;
+        if (t._removePhoto && editingTeacher.photo_path) {
+          try { await deletePersonPhoto(editingTeacher.photo_path); } catch(e) {}
+          photoPath = null;
+        } else if (t._photoBlob) {
+          try {
+            const upRes = await uploadPersonPhoto({
+              schoolId,
+              entityType: 'teachers',
+              entityId: editingTeacher.id,
+              fileOrBlob: t._photoBlob,
+              oldPhotoPath: editingTeacher.photo_path
+            });
+            photoPath = upRes.photoPath;
+          } catch (photoErr) {
+            console.warn('Could not upload teacher portrait:', photoErr);
+          }
+        }
+        sanitized.photo_path = photoPath;
         await updateTeacher(editingTeacher.id, sanitized);
         toast('Teacher profile updated', 'success');
       } else {
-        await addTeacher(sanitized);
+        const newTeacher = await addTeacher(sanitized);
+        if (t._photoBlob && newTeacher?.id) {
+          try {
+            const upRes = await uploadPersonPhoto({
+              schoolId,
+              entityType: 'teachers',
+              entityId: newTeacher.id,
+              fileOrBlob: t._photoBlob
+            });
+            if (upRes.photoPath) {
+              await updateTeacher(newTeacher.id, { photo_path: upRes.photoPath });
+            }
+          } catch (photoErr) {
+            console.warn('Could not upload portrait for new teacher:', photoErr);
+          }
+        }
         toast('New teacher registered successfully', 'success');
       }
       await refresh(); setShowModal(false); setEditingTeacher(null);
@@ -247,19 +287,24 @@ export default function Teachers({ currentUser, currentPeriodId }) {
             </div>
           </div>
           {activeTab === 'records' && (
-            <button 
-              className="btn btn-primary" 
-              onClick={() => { setEditingTeacher(null); setShowModal(true); }}
-              disabled={!editingTeacher && (() => {
-                const curPlan = profile.subscription_plan || profile.subscriptionPlan || 'Starter Plan';
-                const pricing = settings?.pricing || {};
-                const planKey = Object.keys(pricing).find(k => k.toLowerCase() === curPlan.toLowerCase());
-                const seatLimit = planKey ? (pricing[planKey].admins || 5) : 5;
-                return registeredUsers.length >= seatLimit;
-              })()}
-            >
-              <PlusIcon size={16} /> Add Teacher
-            </button>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <button 
+                type="button"
+                className="btn btn-secondary" 
+                onClick={() => setShowImporter(true)}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+              >
+                <UploadIcon size={16} /> Import Teachers
+              </button>
+              <button 
+                type="button"
+                className="btn btn-primary" 
+                onClick={() => { setEditingTeacher(null); setShowModal(true); }}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+              >
+                <PlusIcon size={16} /> Add Teacher
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -326,6 +371,9 @@ export default function Teachers({ currentUser, currentPeriodId }) {
         <TeacherModal teacher={editingTeacher} onSave={handleSave}
           onClose={() => { setShowModal(false); setEditingTeacher(null); }} isAdmin={isAdmin} />
       )}
+      {showImporter && (
+        <TeacherImporter profile={profile} onImport={() => refresh()} onClose={() => setShowImporter(false)} />
+      )}
     </div>
   );
 }
@@ -363,7 +411,15 @@ function RecordsTab({ teachers, search, setSearch, total, getTeacherSubjects, ge
                 return (
                   <tr key={t.id}>
                     <td data-label="Code"><code style={{ color: 'var(--text-light)', fontSize: '0.75rem' }}>{t.staff_code || '—'}</code></td>
-                    <td data-label="Name"><strong>{t.name}</strong></td>
+                    <td data-label="Name">
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <Avatar photoPath={t.photo_path} name={t.name} size={34} />
+                        <div>
+                          <strong>{t.name}</strong>
+                          {t.staff_code && <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{t.staff_code}</div>}
+                        </div>
+                      </div>
+                    </td>
                     {isAdmin && <td data-label="TSC No.">{t.tsc_number || '—'}</td>}
                     <td data-label="Phone">{t.phone}</td>
                     <td data-label="Subjects">
@@ -975,7 +1031,7 @@ function ReportsTab({ profile, teachers, assignments, onPrintStaff }) {
 
 // ========== TEACHER MODAL ==========
 function TeacherModal({ teacher, onSave, onClose, isAdmin }) {
-  const [form, setForm] = useState(teacher || { name: '', phone: '', status: 'Active', staff_code: '', pin: '1234' });
+  const [form, setForm] = useState(teacher || { name: '', phone: '', status: 'Active', staff_code: '' });
   const [showPin, setShowPin] = useState(false);
   const [error, setError] = useState(null);
   const [validating, setValidating] = useState(false);
@@ -1015,6 +1071,24 @@ function TeacherModal({ teacher, onSave, onClose, isAdmin }) {
           <div className="modal-body">
             {error && <div className="badge badge-danger" style={{ marginBottom: 16, width: '100%', padding: '10px 12px' }}>{error}</div>}
             
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 16 }}>
+              <ImageUploadField
+                value={form.photoUrl || form.photo_path || form.photo}
+                mode="portrait"
+                shape="circle"
+                size={88}
+                placeholderInitials={form.name ? form.name.split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase() : ''}
+                helperText="Optional teacher portrait. JPG, PNG or WebP (max 5MB)."
+                onChange={({ dataUrl, blob, remove }) => {
+                  if (remove) {
+                    setForm(f => ({ ...f, photo: null, photo_path: null, photoUrl: null, _photoBlob: null, _removePhoto: true }));
+                  } else {
+                    setForm(f => ({ ...f, photo: dataUrl, photoUrl: dataUrl, _photoBlob: blob, _removePhoto: false }));
+                  }
+                }}
+              />
+            </div>
+
             <div className="form-row">
               <div className="form-group" style={{ flex: 1 }}>
                 <label>Staff Code / Index</label>
