@@ -4,6 +4,9 @@ import { getStudents, addStudent, updateStudent, archiveStudent, transferStudent
 import { getFees } from '../data/financeStore';
 import { getClassList, getCBC, getCoreCompetencies } from '../data/academicsStore';
 import { getPrintHeader, getSchoolProfile } from '../data/coreStore';
+import Avatar from '../components/Common/Avatar';
+import ImageUploadField from '../components/Common/ImageUploadField';
+import { uploadPersonPhoto, deletePersonPhoto } from '../lib/storageHelpers';
 import { TERM_FEE } from '../data/seedData';
 import { sanitizeName, sanitizeString } from '../utils/sanitize';
 import { exportNEMIS, downloadCSV, nemisFilename } from '../utils/nemisExport';
@@ -337,6 +340,7 @@ export default function Students({ currentUser, currentPeriodId }) {
                     <td data-label="Adm No"><code style={{fontSize:'0.78rem',color:'var(--text-light)'}}>{s.admNo}</code></td>
                     <td data-label="Full Name">
                       <div style={{display:'flex',alignItems:'center',gap:10,justifyContent:'inherit'}}>
+                        <Avatar photoPath={s.photo_path} name={s.name} size={32} />
                         <div style={{textAlign:'left'}}>
                           <div style={{fontWeight:600,color:'var(--primary)',cursor:'pointer'}} onClick={()=>setSelectedStudent(s)}>{s.name}</div>
                           <div style={{fontSize:'0.7rem',color:'var(--text-muted)'}}>{s.gender}</div>
@@ -460,6 +464,23 @@ function StudentModal({ student, profile, onSave, onClose }) {
       <div className="modal-header"><h3>{student ? <><EditIcon size={18} /> Edit Student</> : <><PlusIcon size={18} /> Add New Student</>}</h3><button className="modal-close" onClick={onClose}>×</button></div>
       <form onSubmit={e=>{e.preventDefault();onSave(form);}}>
         <div className="modal-body">
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px' }}>
+            <ImageUploadField
+              value={form.photoUrl || form.photo_path || form.photo}
+              mode="portrait"
+              shape="circle"
+              size={88}
+              placeholderInitials={form.name ? form.name.split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase() : ''}
+              helperText="Optional student portrait. JPG, PNG or WebP (max 5MB)."
+              onChange={({ dataUrl, blob, remove }) => {
+                if (remove) {
+                  setForm(f => ({ ...f, photo: null, photo_path: null, photoUrl: null, _photoBlob: null, _removePhoto: true }));
+                } else {
+                  setForm(f => ({ ...f, photo: dataUrl, photoUrl: dataUrl, _photoBlob: blob, _removePhoto: false }));
+                }
+              }}
+            />
+          </div>
           <div className="form-group"><label>Full Name *</label><input className="form-input" name="name" value={form.name} onChange={hc} required placeholder="e.g. John Kamau"/></div>
           <div className="form-row">
             <div className="form-group"><label>Admission No</label><input className="form-input" name="admNo" value={form.admNo} onChange={hc} placeholder="Auto if blank"/></div>
@@ -605,7 +626,7 @@ function StudentDetail({ student, feeData, onClose, onEdit, currentUser, profile
       <div className="modal-body">
         {loading?<p className="text-muted text-center" style={{padding:20}}>Loading...</p>:<>
           <div style={{textAlign:'center',marginBottom:18}}>
-            <div style={{width:60,height:60,borderRadius:'50%',background:bg,color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'1.2rem',fontWeight:700,margin:'0 auto 10px'}}>{ini}</div>
+            <Avatar photoPath={student.photo_path} name={student.name} size={64} style={{ margin: '0 auto 10px' }} />
             <div style={{fontSize:'0.75rem',fontWeight:800,color:'var(--primary)',letterSpacing:'0.05em',marginBottom:4}}>{student.admNo}</div>
             <h3 style={{fontSize:'1.15rem',fontWeight:800,marginBottom:6,color:'var(--text-main)'}}>{student.name}</h3>
             <div style={{display:'flex',gap:6,justifyContent:'center',flexWrap:'wrap'}}>

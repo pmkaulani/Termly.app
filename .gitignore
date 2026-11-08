@@ -27,6 +27,9 @@ Thumbs.db
 *.log
 npm-debug.log*
 
+# Patches
+*.patch
+
 # Test screenshots
 *.png
 !public/assets/hero.png

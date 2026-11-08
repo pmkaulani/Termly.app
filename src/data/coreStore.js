@@ -509,8 +509,13 @@ export async function saveSchoolProfile(profile) {
   if (profile.gradingSystems !== undefined) row.grading_systems = profile.gradingSystems;
   if (profile.schoolName !== undefined) row.school_name = profile.schoolName;
   if (profile.schoolType !== undefined) row.school_type = profile.schoolType;
-  if (profile.logoUrl !== undefined) row.logo_url = profile.logoUrl;
-  if (profile.logo !== undefined) row.logo = profile.logo;
+  if (profile.logo !== undefined) {
+    row.logo = profile.logo;
+    row.logo_url = profile.logo;
+  } else if (profile.logoUrl !== undefined) {
+    row.logo_url = profile.logoUrl;
+    row.logo = profile.logoUrl;
+  }
   if (profile.primaryColor !== undefined) {
     row.primary_color = profile.primaryColor;
     if (_currentSchoolId && typeof localStorage !== 'undefined') {
@@ -954,13 +959,24 @@ export async function runSchemaMigration(sql) {
 
 // ============= PRINT HELPERS =============
 
-export async function getPrintHeader(title = '') {
-  const profile = await getSchoolProfile();
-  return '<div style="text-align: center; margin-bottom: 20px; border-bottom: 2px solid #333; padding-bottom: 10px;">' +
-         '<h1 style="margin: 0; font-size: 24px; color: #1e3a8a;">' + (profile.schoolName || 'Termly School') + '</h1>' +
-         (profile.motto ? '<p style="margin: 5px 0; font-style: italic;">' + profile.motto + '</p>' : '') +
-         '<p style="margin: 5px 0; font-size: 14px;">' + [profile.address, profile.phone, profile.email].filter(Boolean).join(' | ') + '</p>' +
-         '<h2 style="margin: 15px 0 0 0; font-size: 18px; text-transform: uppercase;">' + title + '</h2>' +
+export async function getPrintHeader(title = '', profileOverride = null) {
+  const profile = profileOverride || (await getSchoolProfile()) || {};
+  const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[char]));
+  const candidateLogo = profile.logo || profile.logoUrl || '';
+  const safeLogo = /^(https?:\/\/|data:image\/(png|jpeg|webp);base64,)/i.test(candidateLogo) ? candidateLogo : '';
+  const logoMarkup = safeLogo
+    ? `<img src="${escapeHtml(safeLogo)}" alt="School logo" style="width:76px;height:76px;object-fit:contain;display:block;flex:0 0 76px;" />`
+    : '';
+
+  return '<div style="text-align:center;margin-bottom:20px;border-bottom:2px solid #333;padding-bottom:10px;">' +
+         `<div style="display:flex;align-items:center;justify-content:center;gap:16px;min-height:76px;">${logoMarkup}<div>` +
+         `<h1 style="margin:0;font-size:24px;color:#1e3a8a;">${escapeHtml(profile.schoolName || 'Termly School')}</h1>` +
+         (profile.motto ? `<p style="margin:5px 0;font-style:italic;">${escapeHtml(profile.motto)}</p>` : '') +
+         '</div></div>' +
+         `<p style="margin:5px 0;font-size:14px;">${escapeHtml([profile.address, profile.phone, profile.email].filter(Boolean).join(' | '))}</p>` +
+         `<h2 style="margin:15px 0 0;font-size:18px;text-transform:uppercase;">${escapeHtml(title)}</h2>` +
          '</div>';
 }
 

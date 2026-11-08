@@ -2,7 +2,7 @@ import * as XLSX from 'xlsx';
 import Papa from 'papaparse';
 
 export const FIELD_DEFINITIONS = [
-  { key: 'admNo', label: 'Admission Number', required: true, aliases: ['admission number', 'admission no', 'adm no', 'adm no.', 'adm', 'registration number', 'reg no', 'student id', 'adm_no'] },
+  { key: 'admNo', label: 'Admission Number', required: true, aliases: ['admission number', 'admission no', 'adm no', 'adm no.', 'adm number', 'adm', 'registration number', 'reg no', 'student id', 'adm_no'] },
   { key: 'name', label: 'Student Name', required: true, aliases: ['student name', 'name', 'full name', 'learner name', 'jina', 'student', 'names'] },
   { key: 'class', label: 'Class / Grade', required: true, aliases: ['class', 'grade', 'level', 'form', 'class/grade', 'standard'] },
   { key: 'stream', label: 'Stream / Section', required: false, aliases: ['stream', 'section', 'house', 'arm'] },
@@ -10,8 +10,134 @@ export const FIELD_DEFINITIONS = [
   { key: 'dob', label: 'Date of Birth', required: false, aliases: ['date of birth', 'dob', 'birth date', 'birthdate'] },
   { key: 'parent', label: 'Parent / Guardian Name', required: false, aliases: ['parent name', 'parent', 'guardian name', 'guardian', 'father', 'mother', 'parent / guardian'] },
   { key: 'parentPhone', label: 'Parent Phone Number', required: false, aliases: ['parent phone', 'phone', 'phone number', 'contact', 'mobile', 'parent contact', 'guardian phone', 'parent_phone'] },
-  { key: 'parentEmail', label: 'Parent Email', required: false, aliases: ['parent email', 'email', 'email address', 'guardian email', 'parent_email'] }
+  { key: 'parentEmail', label: 'Parent Email', required: false, aliases: ['parent email', 'email', 'email address', 'guardian email', 'parent_email'] },
+  { key: 'residence', label: 'Residence / Boarding', required: false, aliases: ['residence', 'residence type', 'boarding', 'day/boarding', 'day or boarding', 'hostel'] },
+  { key: 'upi', label: 'UPI / NEMIS No', required: false, aliases: ['upi', 'nemis', 'nemis no', 'upi no', 'upi/nemis'] },
+  { key: 'birthCertNo', label: 'Birth Certificate No', required: false, aliases: ['birth cert no', 'birth certificate', 'birth certificate no', 'cert no'] },
+  { key: 'photoFile', label: 'Photo Filename', required: false, aliases: ['photo', 'photo filename', 'image', 'picture', 'photo file'] }
 ];
+
+export const TEACHER_FIELD_DEFINITIONS = [
+  { key: 'staffCode', label: 'Staff Code / Index', required: false, aliases: ['staff code', 'staff id', 'teacher id', 'code', 'index', 'staff no', 'staff_code', 't-code'] },
+  { key: 'name', label: 'Full Name', required: true, aliases: ['teacher name', 'full name', 'name', 'staff name', 'instructor', 'names', 'jina'] },
+  { key: 'phone', label: 'Phone Number', required: true, aliases: ['phone', 'phone number', 'mobile', 'telephone', 'contact', 'cell', 'tel'] },
+  { key: 'email', label: 'Email Address', required: false, aliases: ['email', 'email address', 'e-mail', 'mail'] },
+  { key: 'tscNumber', label: 'TSC Number', required: false, aliases: ['tsc', 'tsc number', 'tsc no', 'tsc_number', 'registration no'] },
+  { key: 'subjects', label: 'Subjects Taught', required: false, aliases: ['subjects', 'subject', 'specialization', 'teaching subjects', 'subject taught'] },
+  { key: 'status', label: 'Status', required: false, aliases: ['status', 'employment status', 'active/left', 'state'] },
+  { key: 'photoFile', label: 'Photo Filename', required: false, aliases: ['photo', 'photo filename', 'image', 'picture', 'photo file'] }
+];
+
+export const normalizeHeader = (value) => String(value || '')
+  .normalize('NFKD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, ' ')
+  .trim()
+  .replace(/\s+/g, ' ');
+
+function formatDateParts(year, month, day) {
+  if (!year || !month || !day) return '';
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return ''; // Invalid calendar day (e.g. Feb 31)
+  }
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+/**
+ * Normalizes input date from Excel serials, ISO dates, or formatted strings.
+ * Defaults ambiguous slash dates to DD/MM/YYYY (Kenya convention).
+ */
+export function normalizeImportDate(value, formatConvention = 'DD/MM/YYYY') {
+  if (value === null || value === undefined || value === '') return '';
+
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return formatDateParts(value.getFullYear(), value.getMonth() + 1, value.getDate());
+  }
+
+  // Excel serial number (1 = 1900-01-01, max 73050 = ~2100)
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 1 && value <= 73050) {
+    const date = new Date(Date.UTC(1899, 11, 30) + Math.floor(value) * 86400000);
+    return formatDateParts(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate());
+  }
+
+  const input = String(value).trim();
+  if (!input) return '';
+
+  // ISO: YYYY-MM-DD or YYYY/MM/DD
+  const iso = input.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+  if (iso) {
+    const y = Number(iso[1]);
+    const m = Number(iso[2]);
+    const d = Number(iso[3]);
+    const formatted = formatDateParts(y, m, d);
+    if (formatted) return formatted;
+  }
+
+  // Slash or dash formatted: e.g. 31/12/2010 or 12/31/2010
+  const slashMatch = input.match(/^(\d{1,2})[/. -](\d{1,2})[/. -](\d{4})$/);
+  if (slashMatch) {
+    let day = Number(slashMatch[1]);
+    let month = Number(slashMatch[2]);
+    const year = Number(slashMatch[3]);
+
+    if (formatConvention === 'MM/DD/YYYY') {
+      month = Number(slashMatch[1]);
+      day = Number(slashMatch[2]);
+    } else {
+      // If day > 12 and month <= 12, it's definitely DD/MM/YYYY regardless
+      // If month > 12 and day <= 12, invert if possible
+      if (month > 12 && day <= 12) {
+        const temp = day;
+        day = month;
+        month = temp;
+      }
+    }
+
+    const formatted = formatDateParts(year, month, day);
+    if (formatted) return formatted;
+  }
+
+  // Numeric serial in string form
+  if (/^\d{1,7}(?:\.\d+)?$/.test(input)) {
+    const serial = Number(input);
+    if (serial >= 1 && serial <= 73050) {
+      return normalizeImportDate(serial, formatConvention);
+    }
+  }
+
+  return input;
+}
+
+/**
+ * Detects header row in the first scanLimit rows.
+ * Allows spreadsheets with title rows, metadata, or blank rows at the top.
+ */
+export function detectHeaderRow(rows = [], scanLimit = 20, fieldDefs = FIELD_DEFINITIONS) {
+  const requiredKeys = fieldDefs.filter(f => f.required).map(f => f.key);
+  let bestIndex = 0;
+  let bestScore = -1;
+
+  rows.slice(0, scanLimit).forEach((row, index) => {
+    if (!Array.isArray(row)) return;
+    const mapped = autoDetectColumnMappings(row, fieldDefs);
+    const requiredMatches = requiredKeys.filter(key => mapped[key] !== undefined).length;
+    const totalMatches = Object.keys(mapped).length;
+    const score = requiredMatches * 100 + totalMatches;
+
+    if (requiredMatches >= Math.min(2, requiredKeys.length) && score > bestScore) {
+      bestIndex = index;
+      bestScore = score;
+    }
+  });
+
+  return bestIndex;
+}
 
 /**
  * Reads a spreadsheet file (.xlsx, .xls, .csv, .tsv)
@@ -52,7 +178,7 @@ export async function readSpreadsheetFile(file) {
     reader.onload = (e) => {
       try {
         const buffer = e.target.result;
-        const workbook = XLSX.read(buffer, { type: 'array' });
+        const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
         const sheetNames = workbook.SheetNames || [];
 
         if (sheetNames.length === 0) {
@@ -65,7 +191,7 @@ export async function readSpreadsheetFile(file) {
             const targetSheet = sheetName || sheetNames[0];
             const ws = workbook.Sheets[targetSheet];
             if (!ws) return [];
-            return XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+            return XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false, dateNF: 'yyyy-mm-dd' });
           }
         });
       } catch (err) {
@@ -80,37 +206,44 @@ export async function readSpreadsheetFile(file) {
 /**
  * Automatically maps raw spreadsheet headers to standard fields using aliases
  */
-export function autoDetectColumnMappings(headers = []) {
+export function autoDetectColumnMappings(headers = [], fieldDefs = FIELD_DEFINITIONS) {
   const mappings = {}; // { [standardFieldKey]: rawHeaderIndex }
-  const normalizedHeaders = headers.map(h => String(h || '').trim().toLowerCase().replace(/[^\w\s]/g, ''));
+  const normalizedHeaders = headers.map(normalizeHeader);
+  const usedHeaderIndexes = new Set();
 
-  FIELD_DEFINITIONS.forEach(field => {
-    let matchedIdx = -1;
-
-    // Exact alias check
-    for (let i = 0; i < normalizedHeaders.length; i++) {
-      const h = normalizedHeaders[i];
-      if (!h) continue;
-      if (field.aliases.some(alias => h === alias || h === alias.replace(/[^\w\s]/g, ''))) {
-        matchedIdx = i;
-        break;
-      }
-    }
-
-    // Partial contains check if no exact match
-    if (matchedIdx === -1) {
-      for (let i = 0; i < normalizedHeaders.length; i++) {
-        const h = normalizedHeaders[i];
-        if (!h) continue;
-        if (field.aliases.some(alias => h.includes(alias))) {
-          matchedIdx = i;
-          break;
-        }
-      }
-    }
-
+  // 1. Resolve exact alias matches for every field first.
+  // This prevents broad aliases like "parent" from consuming "parent email" or "parent phone".
+  fieldDefs.forEach(field => {
+    const aliases = field.aliases.map(normalizeHeader).filter(Boolean);
+    const matchedIdx = normalizedHeaders.findIndex((header, index) =>
+      Boolean(header) && !usedHeaderIndexes.has(index) && aliases.includes(header)
+    );
     if (matchedIdx !== -1) {
       mappings[field.key] = matchedIdx;
+      usedHeaderIndexes.add(matchedIdx);
+    }
+  });
+
+  // 2. Resolve longest partial matches for remaining unmapped fields
+  fieldDefs.forEach(field => {
+    if (mappings[field.key] !== undefined) return;
+    const aliases = field.aliases
+      .map(normalizeHeader)
+      .filter(alias => alias.length >= 4)
+      .sort((a, b) => b.length - a.length);
+
+    let best = null;
+    normalizedHeaders.forEach((header, index) => {
+      if (!header || usedHeaderIndexes.has(index)) return;
+      const alias = aliases.find(candidate => header.includes(candidate));
+      if (alias && (!best || alias.length > best.alias.length)) {
+        best = { index, alias };
+      }
+    });
+
+    if (best) {
+      mappings[field.key] = best.index;
+      usedHeaderIndexes.add(best.index);
     }
   });
 
@@ -118,22 +251,15 @@ export function autoDetectColumnMappings(headers = []) {
 }
 
 /**
- * Validates mapped data rows against business rules & existing database students
- *
- * @param {Array<Array<any>>} rawRows 2D array of rows from sheet
- * @param {number} headerRowIdx Index of header row (usually 0)
- * @param {object} mappings { [fieldKey]: headerIndex }
- * @param {object} options
- * @param {Array<string>} options.activeClasses Valid school classes
- * @param {object} options.streamsPerClass Valid streams per class
- * @param {Array<object>} options.existingStudents Existing DB students { admNo, name, class, stream }
+ * Validates student mapped rows
  */
 export function validateImportRows(rawRows, headerRowIdx, mappings, {
   activeClasses = [],
   streamsPerClass = {},
-  existingStudents = []
+  existingStudents = [],
+  dateFormat = 'DD/MM/YYYY'
 } = {}) {
-  const dataRows = rawRows.slice(headerRowIdx + 1).filter(r => r.some(c => String(c).trim() !== ''));
+  const dataRows = rawRows.slice(headerRowIdx + 1).filter(r => r.some(c => String(c ?? '').trim() !== ''));
   const seenFileAdmNos = new Set();
   const existingAdmMap = new Map();
 
@@ -157,11 +283,15 @@ export function validateImportRows(rawRows, headerRowIdx, mappings, {
     // Extract mapped values
     FIELD_DEFINITIONS.forEach(def => {
       const colIdx = mappings[def.key];
-      const rawVal = colIdx !== undefined ? String(row[colIdx] || '').trim() : '';
-      record[def.key] = rawVal;
+      const rawVal = colIdx !== undefined ? row[colIdx] : '';
+      if (def.key === 'dob') {
+        record[def.key] = normalizeImportDate(rawVal, dateFormat);
+      } else {
+        record[def.key] = String(rawVal ?? '').trim();
+      }
     });
 
-    // 1. Admission Number Validation
+    // 1. Admission Number Validation (preserve text & leading zeroes)
     const rawAdm = record.admNo;
     if (!rawAdm) {
       rowErrors.admNo = 'Admission number is required';
@@ -226,6 +356,21 @@ export function validateImportRows(rawRows, headerRowIdx, mappings, {
       else rowWarnings.gender = `Unrecognized gender "${record.gender}"`;
     }
 
+    // 6. Date of Birth Validation
+    if (record.dob && !/^\d{4}-\d{2}-\d{2}$/.test(record.dob)) {
+      rowErrors.dob = 'Date of birth must be a valid date. Use DD/MM/YYYY or YYYY-MM-DD.';
+    }
+
+    // 7. Residence Type Normalization
+    if (record.residence) {
+      const resLower = record.residence.toLowerCase();
+      if (resLower.includes('board') || resLower.includes('hostel')) {
+        record.residence = 'Boarding';
+      } else {
+        record.residence = 'Day';
+      }
+    }
+
     const hasErrors = Object.keys(rowErrors).length > 0;
     if (!hasErrors) validCount++;
 
@@ -251,7 +396,128 @@ export function validateImportRows(rawRows, headerRowIdx, mappings, {
 }
 
 /**
- * Generates and downloads a sample student import template in .xlsx and .csv formats
+ * Validates teacher mapped rows
+ */
+export function validateTeacherImportRows(rawRows, headerRowIdx, mappings, {
+  existingTeachers = [],
+  availableSubjects = []
+} = {}) {
+  const dataRows = rawRows.slice(headerRowIdx + 1).filter(r => r.some(c => String(c ?? '').trim() !== ''));
+  const seenFileStaffCodes = new Set();
+  const seenFilePhones = new Set();
+  const existingCodeMap = new Map();
+  const existingPhoneMap = new Map();
+
+  existingTeachers.forEach(t => {
+    const code = String(t.staff_code || t.staffCode || '').trim().toLowerCase();
+    if (code) existingCodeMap.set(code, t);
+    const phone = String(t.phone || '').trim().replace(/\s+/g, '');
+    if (phone) existingPhoneMap.set(phone, t);
+  });
+
+  const validatedRows = [];
+  let validCount = 0;
+  let fileDuplicateCount = 0;
+  let dbDuplicateCount = 0;
+  let missingRequiredCount = 0;
+
+  dataRows.forEach((row, rowIdx) => {
+    const record = { _rowNumber: headerRowIdx + 2 + rowIdx, _rawRow: row };
+    const rowErrors = {};
+    const rowWarnings = {};
+
+    TEACHER_FIELD_DEFINITIONS.forEach(def => {
+      const colIdx = mappings[def.key];
+      const rawVal = colIdx !== undefined ? row[colIdx] : '';
+      record[def.key] = String(rawVal ?? '').trim();
+    });
+
+    // 1. Full Name (Required)
+    if (!record.name || record.name.length < 2) {
+      rowErrors.name = 'Full name is required (min 2 characters)';
+      missingRequiredCount++;
+    }
+
+    // 2. Phone Number (Required)
+    if (!record.phone) {
+      rowErrors.phone = 'Phone number is required';
+      missingRequiredCount++;
+    } else {
+      const cleanPhone = record.phone.replace(/[\s-]/g, '');
+      if (seenFilePhones.has(cleanPhone)) {
+        rowErrors.phone = `Duplicate phone number in file: ${record.phone}`;
+        fileDuplicateCount++;
+      } else {
+        seenFilePhones.add(cleanPhone);
+      }
+      if (existingPhoneMap.has(cleanPhone)) {
+        record._isDbDuplicate = true;
+        record._existingRecord = existingPhoneMap.get(cleanPhone);
+        rowWarnings.phone = `Phone matches existing teacher: ${record._existingRecord.name}`;
+        dbDuplicateCount++;
+      }
+    }
+
+    // 3. Staff Code (Optional, but if present must be unique per school)
+    if (record.staffCode) {
+      const lowerCode = record.staffCode.toLowerCase();
+      if (seenFileStaffCodes.has(lowerCode)) {
+        rowErrors.staffCode = `Duplicate staff code in file: ${record.staffCode}`;
+        fileDuplicateCount++;
+      } else {
+        seenFileStaffCodes.add(lowerCode);
+      }
+      if (existingCodeMap.has(lowerCode)) {
+        record._isDbDuplicate = true;
+        record._existingRecord = existingCodeMap.get(lowerCode);
+        rowWarnings.staffCode = `Staff code matches existing teacher: ${record._existingRecord.name}`;
+        dbDuplicateCount++;
+      }
+    }
+
+    // 4. Subjects Parsing (Support commas, semicolons, slashes)
+    if (record.subjects) {
+      const subjectList = record.subjects
+        .split(/[,;/|]+/)
+        .map(s => s.trim())
+        .filter(Boolean);
+      record._parsedSubjects = subjectList;
+    } else {
+      record._parsedSubjects = [];
+    }
+
+    // 5. Status normalization
+    if (!record.status || !['active', 'left'].includes(record.status.toLowerCase())) {
+      record.status = 'Active';
+    } else {
+      record.status = record.status.toLowerCase() === 'left' ? 'Left' : 'Active';
+    }
+
+    const hasErrors = Object.keys(rowErrors).length > 0;
+    if (!hasErrors) validCount++;
+
+    validatedRows.push({
+      ...record,
+      _errors: rowErrors,
+      _warnings: rowWarnings,
+      _isValid: !hasErrors
+    });
+  });
+
+  return {
+    rows: validatedRows,
+    summary: {
+      totalRows: dataRows.length,
+      validCount,
+      fileDuplicateCount,
+      dbDuplicateCount,
+      missingRequiredCount
+    }
+  };
+}
+
+/**
+ * Downloads student template
  */
 export function downloadImportTemplate(format = 'xlsx') {
   const headers = [
@@ -260,10 +526,11 @@ export function downloadImportTemplate(format = 'xlsx') {
     'Class *',
     'Stream',
     'Gender',
-    'Date of Birth',
+    'Date of Birth (DD/MM/YYYY)',
     'Parent Name',
     'Parent Phone',
-    'Parent Email'
+    'Parent Email',
+    'Residence (Day/Boarding)'
   ];
 
   const sampleRows = [
@@ -273,10 +540,11 @@ export function downloadImportTemplate(format = 'xlsx') {
       'Grade 1',
       'North',
       'Male',
-      '2018-05-14',
+      '14/05/2018',
       'James Kamau',
       '+254712345678',
-      'j.kamau@gmail.com'
+      'j.kamau@gmail.com',
+      'Day'
     ],
     [
       'ADM-1002',
@@ -284,10 +552,11 @@ export function downloadImportTemplate(format = 'xlsx') {
       'Grade 1',
       'South',
       'Female',
-      '2018-09-22',
+      '22/09/2018',
       'Grace Wanjiku',
       '+254722987654',
-      'wanjiku.g@yahoo.com'
+      'wanjiku.g@yahoo.com',
+      'Boarding'
     ]
   ];
 
@@ -305,42 +574,91 @@ export function downloadImportTemplate(format = 'xlsx') {
     return;
   }
 
-  // Excel format
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet([headers, ...sampleRows]);
   ws['!cols'] = [
-    { wch: 18 }, // Admission No
-    { wch: 24 }, // Student Name
-    { wch: 14 }, // Class
-    { wch: 14 }, // Stream
-    { wch: 10 }, // Gender
-    { wch: 14 }, // DOB
-    { wch: 22 }, // Parent Name
-    { wch: 18 }, // Parent Phone
-    { wch: 24 }  // Parent Email
+    { wch: 18 }, { wch: 24 }, { wch: 14 }, { wch: 14 },
+    { wch: 10 }, { wch: 22 }, { wch: 22 }, { wch: 18 },
+    { wch: 24 }, { wch: 20 }
   ];
   XLSX.utils.book_append_sheet(wb, ws, 'Students');
   XLSX.writeFile(wb, 'Termly_Student_Import_Template.xlsx');
 }
 
 /**
+ * Downloads teacher template
+ */
+export function downloadTeacherImportTemplate(format = 'xlsx') {
+  const headers = [
+    'Staff Code',
+    'Full Name *',
+    'Phone Number *',
+    'Email Address',
+    'TSC Number',
+    'Subjects (comma separated)',
+    'Status (Active/Left)'
+  ];
+
+  const sampleRows = [
+    [
+      'T-001',
+      'Grace Mutua',
+      '+254711223344',
+      'grace.mutua@school.ac.ke',
+      'TSC-892144',
+      'Mathematics, Physics',
+      'Active'
+    ],
+    [
+      'T-002',
+      'David Omondi',
+      '+254722334455',
+      'david.omondi@school.ac.ke',
+      'TSC-781920',
+      'English, Literature',
+      'Active'
+    ]
+  ];
+
+  if (format === 'csv') {
+    const csvContent = Papa.unparse([headers, ...sampleRows]);
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', 'Termly_Teacher_Import_Template.csv');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    return;
+  }
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...sampleRows]);
+  ws['!cols'] = [
+    { wch: 16 }, { wch: 24 }, { wch: 18 }, { wch: 26 },
+    { wch: 16 }, { wch: 30 }, { wch: 16 }
+  ];
+  XLSX.utils.book_append_sheet(wb, ws, 'Teachers');
+  XLSX.writeFile(wb, 'Termly_Teacher_Import_Template.xlsx');
+}
+
+/**
  * Generates and downloads an error report workbook explaining why rows failed
  */
-export function downloadErrorReport(failedRows = []) {
+export function downloadErrorReport(failedRows = [], filename = 'Import_Error_Report') {
   if (failedRows.length === 0) return;
 
   const exportData = failedRows.map(row => ({
-    'Row #': row._rowNumber || '',
-    'Admission Number': row.admNo || '',
-    'Student Name': row.name || '',
-    'Class': row.class || '',
-    'Stream': row.stream || '',
-    'Gender': row.gender || '',
-    'Failure Reason': Object.values(row._errors || {}).join('; ') || 'Validation error'
+    'Spreadsheet Row #': row._rowNumber || '',
+    'Identifier': row.admNo || row.staffCode || '',
+    'Name': row.name || '',
+    'Failure Reason': Object.values(row._errors || {}).join('; ') || row.reason || 'Validation error'
   }));
 
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.json_to_sheet(exportData);
-  XLSX.utils.book_append_sheet(wb, ws, 'Import_Errors');
-  XLSX.writeFile(wb, `Student_Import_Error_Report_${new Date().toISOString().split('T')[0]}.xlsx`);
+  XLSX.utils.book_append_sheet(wb, ws, 'Errors');
+  XLSX.writeFile(wb, `${filename}_${new Date().toISOString().split('T')[0]}.xlsx`);
 }

@@ -4,6 +4,7 @@ import { bulkImportStudents, getStudents } from '../data/studentStore';
 import {
   readSpreadsheetFile,
   autoDetectColumnMappings,
+  detectHeaderRow,
   validateImportRows,
   downloadImportTemplate,
   downloadErrorReport,
@@ -25,6 +26,8 @@ export default function StudentImporter({ profile = {}, onImport, onClose }) {
   const [selectedSheet, setSelectedSheet] = useState('');
   const [rawRows, setRawRows] = useState([]);
   const [headers, setHeaders] = useState([]);
+  const [headerRowIndex, setHeaderRowIndex] = useState(0);
+  const [dateFormat, setDateFormat] = useState('DD/MM/YYYY');
   const [mappings, setMappings] = useState({});
   const [validatedData, setValidatedData] = useState({ rows: [], summary: {} });
   const [duplicateAction, setDuplicateAction] = useState('skip'); // 'skip' or 'update'
@@ -50,6 +53,15 @@ export default function StudentImporter({ profile = {}, onImport, onClose }) {
   // Step 1: File Selection & Parsing
   const handleFileChange = async (selectedFile) => {
     if (!selectedFile) return;
+    const extension = selectedFile.name?.split('.').pop()?.toLowerCase();
+    if (!['xlsx', 'xls', 'csv', 'tsv'].includes(extension)) {
+      alert({ title: 'Unsupported File', message: 'Choose an Excel (.xlsx/.xls), CSV or TSV file.', variant: 'warning' });
+      return;
+    }
+    if (selectedFile.size > 10 * 1024 * 1024) {
+      alert({ title: 'File Too Large', message: 'Keep each import file below 10 MB. Split larger files into smaller batches.', variant: 'warning' });
+      return;
+    }
     setFile(selectedFile);
     setIsProcessing(true);
 
@@ -79,7 +91,9 @@ export default function StudentImporter({ profile = {}, onImport, onClose }) {
     }
 
     setRawRows(rows);
-    const headerRow = rows[0].map(h => String(h || '').trim());
+    const detectedHeaderIndex = detectHeaderRow(rows, 20);
+    setHeaderRowIndex(detectedHeaderIndex);
+    const headerRow = (rows[detectedHeaderIndex] || []).map(h => String(h || '').trim());
     setHeaders(headerRow);
 
     // Auto detect column mappings
@@ -87,10 +101,11 @@ export default function StudentImporter({ profile = {}, onImport, onClose }) {
     setMappings(detected);
 
     // Run initial validation
-    const validation = validateImportRows(rows, 0, detected, {
+    const validation = validateImportRows(rows, detectedHeaderIndex, detected, {
       activeClasses,
       streamsPerClass,
-      existingStudents: existingDbStudents
+      existingStudents: existingDbStudents,
+      dateFormat
     });
     setValidatedData(validation);
     setStep(3); // Column Mapping & Validation Step
@@ -120,10 +135,11 @@ export default function StudentImporter({ profile = {}, onImport, onClose }) {
     setMappings(updated);
 
     // Re-run validation with updated mappings
-    const validation = validateImportRows(rawRows, 0, updated, {
+    const validation = validateImportRows(rawRows, headerRowIndex, updated, {
       activeClasses,
       streamsPerClass,
-      existingStudents: existingDbStudents
+      existingStudents: existingDbStudents,
+      dateFormat
     });
     setValidatedData(validation);
   };

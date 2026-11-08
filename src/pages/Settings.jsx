@@ -14,6 +14,8 @@ import { useDialog } from '../contexts/DialogContext';
 import { useFeature } from '../contexts/FeaturesContext';
 import Cropper from 'react-easy-crop';
 import getCroppedImg from '../utils/cropImage';
+import ImageUploadField from '../components/Common/ImageUploadField';
+import { uploadSchoolLogo } from '../lib/storageHelpers';
 import {
   ClockIcon, CheckIcon, SaveIcon, SchoolIcon, ImageIcon, FolderIcon,
   BookIcon, CardIcon, DiamondIcon, PhoneIcon, RefreshIcon, CrossIcon, PlusIcon,
@@ -581,48 +583,43 @@ export default function Settings() {
           <div className="card">
             <div className="card-header"><h3><ImageIcon size={20} /> Visual Identity</h3></div>
             <div className="card-body">
-              <div
-                onClick={()=>fileRef.current.click()}
-                style={{
-                  width: '100%',
-                  minHeight: 140,
-                  borderRadius: 16,
-                  marginBottom: 16,
-                  background: 'var(--bg)',
-                  border: '2px dashed var(--border)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  cursor: 'pointer',
-                  overflow: 'hidden',
-                  transition: 'border-color 0.15s',
-                  padding: 16
+              <ImageUploadField
+                value={logoPreview}
+                mode="logo"
+                label="School Logo / Crest"
+                shape="rectangle"
+                size={120}
+                maxSizeBytes={2 * 1024 * 1024}
+                placeholderIcon={<SchoolIcon size={36} />}
+                helperText="PNG, JPG or WebP (max 2MB). Preserves wordmark width and transparency."
+                onChange={async ({ dataUrl, blob, remove }) => {
+                  if (remove) {
+                    handleRemoveLogo();
+                    return;
+                  }
+                  try {
+                    setLogoPreview(dataUrl);
+                    let finalUrl = dataUrl;
+                    const schoolId = profile.school_id || profile.schoolId;
+                    if (schoolId && blob) {
+                      try {
+                        const res = await uploadSchoolLogo({
+                          schoolId,
+                          fileOrBlob: blob,
+                          oldLogoUrl: profile.logo || profile.logoUrl
+                        });
+                        if (res?.logoUrl) finalUrl = res.logoUrl;
+                      } catch (uploadErr) {
+                        console.warn('Falling back to local data URL for logo:', uploadErr);
+                      }
+                    }
+                    setProfile(p => ({ ...p, logo: finalUrl, logoUrl: finalUrl }));
+                    setSaved(false);
+                  } catch (err) {
+                    alert({ title: 'Logo Error', message: err.message || 'Could not process logo.', variant: 'danger' });
+                  }
                 }}
-                onMouseEnter={e=>e.currentTarget.style.borderColor='var(--primary)'}
-                onMouseLeave={e=>e.currentTarget.style.borderColor='var(--border)'}>
-                {logoPreview ? (
-                  <img src={logoPreview} alt="Logo" style={{ maxWidth: '100%', maxHeight: 110, objectFit: 'contain' }} />
-                ) : (
-                  <div style={{color:'var(--text-muted)',textAlign:'center'}}>
-                    <div style={{fontSize:'2.2rem',marginBottom:8}}><ImageIcon size={32} /></div>
-                    <div style={{fontSize:'0.75rem',fontWeight:600,color:'var(--text)'}}>Click to upload school logo</div>
-                    <div style={{fontSize:'0.65rem',marginTop:4}}>PNG or JPG · Max 2MB</div>
-                  </div>
-                )}
-              </div>
-              
-              <input ref={fileRef} type="file" hidden onChange={handleLogoUpload} accept="image/*"/>
-              
-              <div style={{ display: 'flex', gap: 12 }}>
-                <button className="btn btn-secondary" style={{ flex: 1 }} onClick={()=>fileRef.current.click()}>
-                  <FolderIcon size={16} /> {logoPreview ? 'Change Logo' : 'Upload Logo'}
-                </button>
-                {logoPreview && (
-                  <button className="btn btn-outline" style={{ color: 'var(--danger)', borderColor: 'var(--danger-light)' }} onClick={handleRemoveLogo}>
-                    Remove
-                  </button>
-                )}
-              </div>
+              />
 
               <div style={{ marginTop: 24, paddingTop: 24, borderTop: '1px solid var(--border)' }}>
                 <div style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: 12 }}>Brand Color</div>

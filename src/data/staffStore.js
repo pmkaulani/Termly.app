@@ -1,6 +1,6 @@
 import { supabase } from '../lib/supabase';
 import { db } from './offlineStore';
-import { _currentSchoolId, shouldFetchCloud, logAuditEvent } from './coreStore';
+import { _currentSchoolId, shouldFetchCloud, logAuditEvent, getSchoolProfile, logPlatformActivity } from './coreStore';
 import { sanitizeString, sanitizeName } from '../utils/sanitize';
 
 // ============= TEACHERS & STAFF STORE MODULE =============
@@ -16,7 +16,7 @@ export async function getTeachers() {
     try {
       const { data, error } = await supabase
         .from('teachers')
-        .select('id, name, email, phone, subjects, school_id, on_leave, staff_code, status, tsc_number')
+        .select('id, name, email, phone, subjects, school_id, on_leave, staff_code, status, tsc_number, photo_path, photo_updated_at')
         .eq('school_id', _currentSchoolId)
         .order('staff_code', { ascending: true, nullsFirst: false })
         .order('name', { ascending: true });
@@ -94,7 +94,7 @@ export async function getAllSchoolStaff(schoolId) {
 export async function getTeachersBySchool(schoolId) {
   const { data, error } = await supabase
     .from('teachers')
-    .select('id, name, email, phone, subjects, school_id, staff_code, tsc_number')
+    .select('id, name, email, phone, subjects, school_id, staff_code, tsc_number, status, on_leave, photo_path, photo_updated_at')
     .eq('school_id', schoolId)
     .order('staff_code', { ascending: true, nullsFirst: false })
     .order('name', { ascending: true });
@@ -103,26 +103,33 @@ export async function getTeachersBySchool(schoolId) {
 }
 
 export async function addTeacher(teacher) {
+  const payload = { 
+    school_id: _currentSchoolId, 
+    name: sanitizeName(teacher.name), 
+    email: teacher.email ? sanitizeString(teacher.email) : null,
+    phone: teacher.phone || '', 
+    subjects: teacher.subjects || [],
+    status: teacher.status || 'Active', 
+    tsc_number: teacher.tsc_number ? sanitizeString(teacher.tsc_number) : null,
+    staff_code: teacher.staff_code ? sanitizeString(teacher.staff_code) : null,
+    photo_path: teacher.photo_path || null,
+    photo_updated_at: teacher.photo_path ? new Date().toISOString() : null
+  };
+  if (teacher.pin) {
+    payload.pin = teacher.pin;
+  }
   const { data, error } = await supabase
     .from('teachers')
-    .insert({ 
-      school_id: _currentSchoolId, 
-      name: teacher.name, 
-      email: teacher.email || null,
-      phone: teacher.phone || '', 
-      subjects: teacher.subjects || [],
-      status: teacher.status || 'Active', 
-      tsc_number: teacher.tsc_number || null,
-      staff_code: teacher.staff_code || null,
-      pin: teacher.pin || '1234'
-    })
+    .insert(payload)
     .select()
     .single();
     
   if (error) throw error;
   
-  const { data: pData } = await supabase.from('school_profiles').select('staff_count').eq('school_id', _currentSchoolId).maybeSingle();
-  await supabase.from('school_profiles').upsert({ school_id: _currentSchoolId, staff_count: (pData?.staff_count || 0) + 1 }, { onConflict: 'school_id' });
+  const { data: pData } = await supabase.from('school_profiles').select('staff_count').eq('school_id', schoolId)
+    .maybeSingle();
+  await supabase.from('school_profiles').upsert({ school_id: schoolId,
+      staff_count: (pData?.staff_count || 0) + 1 }, { onConflict: 'school_id' });
 
   try { await db.teachers.put(data); } catch(e) {}
   return data;
@@ -139,6 +146,10 @@ export async function updateTeacher(id, updates) {
   if (updates.tsc_number !== undefined) payload.tsc_number = sanitizeString(updates.tsc_number || null);
   if (updates.staff_code !== undefined) payload.staff_code = sanitizeString(updates.staff_code || null);
   if (updates.pin !== undefined) payload.pin = updates.pin;
+  if (updates.photo_path !== undefined) {
+    payload.photo_path = updates.photo_path;
+    payload.photo_updated_at = updates.photo_path ? new Date().toISOString() : null;
+  }
 
   const { data, error } = await supabase
     .from('teachers')
@@ -216,4 +227,194 @@ export async function getTeacherWorkload(teacherId) {
 export async function getTeacherPerformance(teacherId) {
   if (!_currentSchoolId || !teacherId) return { averageScore: 0, passRate: 0 };
   return { averageScore: 74.5, passRate: 92.0 };
+}
+
+/**
+ * Bulk imports teacher profile records into the school directory.
+ * CRITICAL SEPARATION: Imports create teacher profile records ONLY.
+ * NEVER sets default credentials, PINs, passwords, or login accounts.
+ */
+export async function bulkImportTeachers(teachersData, onProgress, options = {}) {
+  const schoolId = _currentSchoolId || options?.schoolId;
+  if (!schoolId) throw new Error('No school context');
+
+  const { duplicateAction = 'skip' } = options; // 'skip' or 'update'
+  const profile = (await getSchoolProfile()) || {};
+
+  // Authoritatively enforce school staff limit
+  const configuredStaffLimit = Number(profile.staffLimit ?? profile.staff_limit ?? 5);
+  const { count: currentStaffCount, error: countErr } = await supabase
+    .from('teachers')
+    .select('id', { count: 'exact', head: true })
+    .eq('school_id', schoolId)
+    .eq('status', 'Active');
+  if (countErr) throw countErr;
+
+  const existingTeachers = await getTeachersBySchool(schoolId);
+  const existingCodeMap = new Map();
+  const existingPhoneMap = new Map();
+
+  existingTeachers.forEach(t => {
+    const code = String(t.staff_code || t.staffCode || '').trim().toLowerCase();
+    if (code) existingCodeMap.set(code, t);
+    const phone = String(t.phone || '').trim().replace(/[\s-]/g, '');
+    if (phone) existingPhoneMap.set(phone, t);
+  });
+
+  const BATCH_SIZE = 50;
+  let insertedCount = 0;
+  let updatedCount = 0;
+  let skippedCount = 0;
+  const errors = [];
+  const seenBatchCodes = new Set();
+  const seenBatchPhones = new Set();
+
+  const toInsert = [];
+  const toUpdate = [];
+
+  teachersData.forEach((t, idx) => {
+    const rowNum = t._rowNumber || idx + 1;
+    const name = sanitizeName(String(t.name || '').trim());
+    const phone = String(t.phone || '').trim();
+    const staffCode = sanitizeString(String(t.staffCode || t.staff_code || '').trim()) || null;
+    const email = sanitizeString(String(t.email || '').trim()) || null;
+    const tscNumber = sanitizeString(String(t.tscNumber || t.tsc_number || '').trim()) || null;
+    const subjects = Array.isArray(t.subjects) ? t.subjects : (t._parsedSubjects || []);
+    const status = String(t.status || 'Active').toLowerCase() === 'left' ? 'Left' : 'Active';
+
+    if (!name || name.length < 2) {
+      errors.push({ row: rowNum, name: name || 'Unknown', reason: 'Full name is required (min 2 chars)' });
+      return;
+    }
+    if (!phone) {
+      errors.push({ row: rowNum, name, reason: 'Phone number is required' });
+      return;
+    }
+
+    const cleanPhone = phone.replace(/[\s-]/g, '');
+    if (seenBatchPhones.has(cleanPhone)) {
+      errors.push({ row: rowNum, name, reason: `Duplicate phone number (${phone}) in import file` });
+      return;
+    }
+    seenBatchPhones.add(cleanPhone);
+
+    if (staffCode) {
+      const lowerCode = staffCode.toLowerCase();
+      if (seenBatchCodes.has(lowerCode)) {
+        errors.push({ row: rowNum, name, reason: `Duplicate staff code (${staffCode}) in import file` });
+        return;
+      }
+      seenBatchCodes.add(lowerCode);
+    }
+
+    // Match duplicate against database records (staffCode if provided, or phone)
+    const existing = (staffCode && existingCodeMap.get(staffCode.toLowerCase())) || existingPhoneMap.get(cleanPhone);
+
+    const record = {
+      _rowNumber: rowNum,
+      school_id: schoolId,
+      name,
+      phone,
+      email,
+      subjects,
+      status,
+      tsc_number: tscNumber,
+      staff_code: staffCode,
+      photo_path: t.photo_path || null
+      // EXPLICIT: NEVER set pin, password, or auth user during bulk import!
+    };
+
+    if (existing) {
+      if (duplicateAction === 'update') {
+        toUpdate.push({ id: existing.id, ...record });
+      } else {
+        skippedCount++;
+      }
+    } else {
+      toInsert.push(record);
+    }
+  });
+
+  // Check capacity before inserting new active teachers
+  const newActiveCount = toInsert.filter(r => r.status === 'Active').length;
+  if (currentStaffCount !== null && (currentStaffCount + newActiveCount > configuredStaffLimit)) {
+    throw new Error(`This import would exceed your school's faculty capacity limit (${configuredStaffLimit}). Currently active: ${currentStaffCount}; new active: ${newActiveCount}.`);
+  }
+
+  // Execute Inserts in batches
+  for (let i = 0; i < toInsert.length; i += BATCH_SIZE) {
+    const batch = toInsert.slice(i, i + BATCH_SIZE);
+    const dbPayload = batch.map(({ _rowNumber, ...fields }) => fields);
+
+    const { data: insertedData, error: insErr } = await supabase
+      .from('teachers')
+      .insert(dbPayload)
+      .select();
+
+    if (insErr) {
+      console.error('Batch teacher insert error:', insErr);
+      batch.forEach((b) => {
+        errors.push({ row: b._rowNumber, name: b.name, reason: insErr.message });
+      });
+    } else {
+      const records = insertedData || dbPayload;
+      insertedCount += records.length;
+      for (const rec of records) {
+        try { await db.teachers.put(rec); } catch (e) {}
+      }
+    }
+
+    if (onProgress) onProgress(insertedCount + updatedCount, teachersData.length);
+  }
+
+  // Execute Updates
+  for (const upd of toUpdate) {
+    const { id, _rowNumber, ...fields } = upd;
+    const { error: updErr } = await supabase
+      .from('teachers')
+      .update(fields)
+      .eq('id', id)
+      .eq('school_id', schoolId);
+
+    if (updErr) {
+      errors.push({ row: _rowNumber || 0, name: fields.name, reason: updErr.message });
+    } else {
+      updatedCount++;
+      try { await db.teachers.update(id, fields); } catch (e) {}
+    }
+
+    if (onProgress) onProgress(insertedCount + updatedCount, teachersData.length);
+  }
+
+  // Update staff count on school profile
+  const { data: pData } = await supabase
+    .from('school_profiles')
+    .select('staff_count')
+    .eq('school_id', schoolId)
+    .maybeSingle();
+
+  await supabase
+    .from('school_profiles')
+    .upsert({
+      school_id: schoolId,
+      staff_count: (pData?.staff_count || 0) + insertedCount
+    }, { onConflict: 'school_id' });
+
+  await logPlatformActivity(
+    'TEACHERS_IMPORT',
+    `Imported ${insertedCount} teachers, updated ${updatedCount}, skipped ${skippedCount}`,
+    schoolId
+  );
+
+  return {
+    success: errors.length === 0 || insertedCount + updatedCount > 0,
+    count: insertedCount + updatedCount,
+    inserted: insertedCount,
+    insertedCount,
+    updated: updatedCount,
+    updatedCount,
+    skipped: skippedCount,
+    skippedCount,
+    errors
+  };
 }
