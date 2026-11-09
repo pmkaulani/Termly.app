@@ -13,18 +13,22 @@ export async function getStudentBooks(studentId) {
   if (!_currentAuthUser) {
     const { data, error } = await supabase.rpc('portal_get_student_books', {
       p_student_id: studentId,
-      p_school_id: schoolId,
     });
     if (error) {
       console.error('[Portal] Student books RPC failed:', error.message);
       throw error;
     }
-    return data || [];
+    const today = new Date().toISOString().slice(0, 10);
+    return (Array.isArray(data) ? data : []).map(book => ({
+      ...book,
+      issue_date: book.issue_date || book.borrow_date || null,
+      is_overdue: Boolean(book.is_overdue || (book.due_date && book.due_date < today)),
+    }));
   }
 
   const { data, error } = await supabase
     .from('borrow_records')
-    .select('id, due_date, book_copies(copy_code, books(title, isbn))')
+    .select('id, borrow_date, due_date, status, book_copies(copy_code, books(title, author, isbn))')
     .eq('student_id', studentId)
     .eq('school_id', schoolId)
     .eq('status', 'borrowed');
@@ -33,9 +37,12 @@ export async function getStudentBooks(studentId) {
   return (data || []).map(record => ({
     id: record.id,
     title: record.book_copies?.books?.title,
+    author: record.book_copies?.books?.author,
     isbn: record.book_copies?.books?.isbn,
     copy_code: record.book_copies?.copy_code,
+    issue_date: record.borrow_date,
     due_date: record.due_date,
+    status: record.status,
     is_overdue: record.due_date < new Date().toISOString().split('T')[0],
   }));
 }

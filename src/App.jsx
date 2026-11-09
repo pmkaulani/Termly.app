@@ -677,8 +677,8 @@ function App() {
         <Routes>
           <Route path="/"                   element={<Landing />} />
           
-          <Route path="/portal/login"       element={<PortalLogin onLogin={(u) => { localStorage.setItem('Termly_portal_user', JSON.stringify(u)); window.location.href='/portal/dashboard'; }} />} />
-          <Route path="/staff/login"        element={<StaffLogin onLogin={(u) => { localStorage.setItem('Termly_staff_user', JSON.stringify(u)); window.location.href='/staff/grading'; }} />} />
+          <Route path="/portal/login"       element={<PortalLogin onLogin={(u) => { if (u?.token) localStorage.setItem('Termly_Portal_Token', u.token); localStorage.setItem('Termly_portal_user', JSON.stringify(u)); window.location.href='/portal/dashboard'; }} />} />
+          <Route path="/staff/login"        element={<StaffLogin onLogin={(u) => { if (u?.token) localStorage.setItem('Termly_Staff_Token', u.token); localStorage.setItem('Termly_staff_user', JSON.stringify(u)); window.location.href='/staff/grading'; }} />} />
 
           <Route path="/portal/*"           element={<PortalManager />} />
           <Route path="/staff/*"            element={<StaffPortalManager />} />
