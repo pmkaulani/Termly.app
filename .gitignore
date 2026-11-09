@@ -48,7 +48,10 @@ termly-platform-foundation/
 termly-platform-foundation.zip
 termly-phase2-school-hosted/
 termly-phase2-school-hosted.zip
+termly-phase3-data-protection/
+termly-phase3-data-protection.zip
 
 # School-hosted deployments: per-school runtime settings.
 deployment/school-hosted/.env
 deployment/school-hosted/runtime/termly-runtime-config.js
+deployment/school-hosted/backup/backup.env
