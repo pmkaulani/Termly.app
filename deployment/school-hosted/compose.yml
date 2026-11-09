@@ -1,0 +1,28 @@
+services:
+  termly-web:
+    build:
+      context: ../..
+      dockerfile: deployment/school-hosted/Dockerfile
+    image: termly-school-web:local
+    restart: unless-stopped
+    ports:
+      # Default is reachable on the school LAN. For a host Caddy reverse proxy,
+      # set TERMLY_WEB_BIND=127.0.0.1 in .env and proxy to localhost:8080.
+      - "${TERMLY_WEB_BIND:-0.0.0.0}:${TERMLY_WEB_PORT:-8080}:8080"
+    volumes:
+      - ./runtime/termly-runtime-config.js:/usr/share/nginx/html/termly-runtime-config.js:ro
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1:8080/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

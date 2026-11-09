@@ -30,14 +30,6 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png" />
 
-    <!--
-      Structured data — helps search engines understand what this is,
-      can enable rich snippets. No price included: your pricing page
-      still has illustrative numbers, not real ones (see the pricing
-      section built earlier) — add "offers" once those are real, since
-      shipping a schema price that doesn't match the visible page price
-      is the kind of mismatch Search Console flags.
-    -->
     <script type="application/ld+json">
     {
       "@context": "https://schema.org",
@@ -51,6 +43,8 @@
     }
     </script>
     <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- Loaded before the app bundle so one built Termly release can target each school's server. -->
+    <script src="./termly-runtime-config.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Epilogue:wght@400;500;600;700;800;900&family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -60,6 +54,5 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
-
   </body>
 </html>
