@@ -1,0 +1,16 @@
+[Unit]
+Description=Encrypted Termly school-hosted backup
+Wants=network-online.target
+Requires=docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+Environment=TERMLY_BACKUP_ENV=/etc/termly/backup.env
+ExecStart=@TERMLY_ROOT@/scripts/backup-school-hosted.sh --label scheduled
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

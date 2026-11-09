@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily encrypted Termly school-hosted backup
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+Persistent=true
+RandomizedDelaySec=10m
+Unit=termly-backup.service
+
+[Install]
+WantedBy=timers.target
