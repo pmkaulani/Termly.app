@@ -171,10 +171,16 @@ export default function TeacherImporter({ profile = {}, onImport, onClose }) {
         setProgress({ current, total });
       }, { duplicateAction });
 
-      setImportResult(result);
+      const completedResult = {
+        ...result,
+        totalRows: validatedData.summary.totalRows || validatedData.rows.length,
+        failed: (result.errors?.length || 0) + uncorrectedErrors,
+        sourceFileName: file?.name ? String(file.name).split('.').pop().toLowerCase() : null
+      };
+      setImportResult(completedResult);
       setStep(6); // Results Report
 
-      if (onImport) onImport(result);
+      if (onImport) onImport(completedResult);
     } catch (err) {
       alert({ title: 'Import Failed', message: err.message, variant: 'danger' });
       setStep(4);
