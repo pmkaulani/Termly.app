@@ -44,26 +44,24 @@ describe('Data Ingestion: bulkImportStudents', () => {
         select: vi.fn().mockReturnThis(),
         eq: vi.fn().mockReturnThis(),
         order: vi.fn().mockReturnThis(),
-        insert: vi.fn().mockResolvedValue({ data: [{ id: 's-1', name: 'John Doe' }, { id: 's-2', name: 'Jane Doe' }], error: null }),
+        insert: vi.fn().mockReturnValue({ select: () => Promise.resolve({ data: [{ id: 's-1', name: 'John Doe' }, { id: 's-2', name: 'Jane Doe' }], error: null }) }),
         update: vi.fn().mockResolvedValue({ error: null })
       };
       
       if (table === 'students') {
-        chain.select = vi.fn().mockImplementation((cols, opts) => {
-          if (opts?.count === 'exact') {
-            return Promise.resolve({ count: 10, error: null });
-          }
-          return chain;
-        });
-        chain.eq = vi.fn().mockImplementation((col, val) => {
-          if (col === 'school_id') {
-            return {
-              order: () => Promise.resolve({ data: [], error: null }),
-              eq: () => Promise.resolve({ count: 10, error: null })
-            };
-          }
-          return chain;
-        });
+        const studentQuery = {
+          eq: vi.fn().mockImplementation((col, val) => {
+            if (col === 'school_id') {
+              return {
+                order: () => Promise.resolve({ data: [], error: null }),
+                eq: () => Promise.resolve({ count: 10, error: null })
+              };
+            }
+            return studentQuery;
+          }),
+          order: () => Promise.resolve({ data: [], error: null })
+        };
+        chain.select = vi.fn().mockReturnValue(studentQuery);
       } else if (table === 'fees') {
         chain.insert = vi.fn().mockResolvedValue({ error: null });
       }

@@ -33,3 +33,12 @@ npm-debug.log*
 # Test screenshots
 *.png
 !public/assets/hero.png
+
+
+# Installer kits and backups
+termly-remediation-kit/
+termly-ui-refresh-kit/
+.termly-ui-backups/
+termly-full-remediation.zip
+termly-ui-refresh-kit.zip
+before-termly-remediation.diff

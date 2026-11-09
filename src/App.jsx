@@ -1074,8 +1074,8 @@ function SuspendedView({ profile, onLogout }) {
                       <Route path="/compliance/nemis" element={<SectionGate featureSlug="nemis" featureName="NEMIS Audit" profile={profile}><NEMISDashboard currentUser={currentUser} /></SectionGate>} />
  
                       {/* Admin/Portal Management */}
-                      <Route path="/security"     element={<Security currentUser={currentUser} />} />
-                      <Route path="/settings"     element={<Settings currentUser={currentUser} />} />
+                      <Route path="/security" element={(['owner', 'admin'].includes(String(currentUser?.role || '').toLowerCase())) ? <Security currentUser={currentUser} /> : <div role="alert" className="p-4">403 - Administrator access required.</div>} />
+                      <Route path="/settings" element={(['owner', 'admin'].includes(String(currentUser?.role || '').toLowerCase())) ? <Settings currentUser={currentUser} /> : <div role="alert" className="p-4">403 - Administrator access required.</div>} />
                       <Route path="/portal/teacher" element={<SectionGate featureSlug="teacher_portal" featureName="Teacher Portal" profile={profile}><TeacherPortalAdmin /></SectionGate>} />
                       <Route path="/portal/parent"  element={<SectionGate featureSlug="parent_portal"  featureName="Parent Portal"  profile={profile}><ParentPortalAdmin /></SectionGate>} />
 

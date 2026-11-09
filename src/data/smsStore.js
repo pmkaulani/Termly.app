@@ -42,21 +42,18 @@ export async function getSmsBalance(schoolId) {
 
 
 export async function queueSMS(phoneNumber, message, type = 'general') {
-  if (!_currentSchoolId) return;
-  try {
-    const { error } = await supabase
-      .from('sms_messages')
-      .insert({
-        school_id: _currentSchoolId,
-        phone_number: phoneNumber,
-        message: message,
-        type: type,
-        status: 'queued'
-      });
-    if (error) console.error('Failed to queue SMS:', error);
-  } catch (err) {
-    console.error('SMS Queue Error:', err);
-  }
+  if (!_currentSchoolId) throw new Error('No school context.');
+  const { data, error } = await supabase
+    .from('sms_messages')
+    .insert({ school_id: _currentSchoolId, phone_number: phoneNumber, message, type, status: 'queued' })
+    .select('id')
+    .single();
+  if (error) throw error;
+  const { data: dispatched, error: dispatchError } = await supabase.functions.invoke('communications-send', {
+    body: { action: 'dispatch_queued', channel: 'sms', messageIds: [data.id] },
+  });
+  if (dispatchError) return { queued: true, sent: false, id: data.id, status: 'queued', dispatchError: dispatchError.message };
+  return { queued: true, sent: Number(dispatched?.accepted_count || 0) === 1, id: data.id, status: Number(dispatched?.accepted_count || 0) === 1 ? 'accepted' : 'failed', dispatch: dispatched };
 }
 
 export async function getSMSLogs() {
@@ -71,35 +68,32 @@ export async function getSMSLogs() {
 }
 
 export async function queueSmsBatch(messages) {
-  if (!_currentSchoolId || !messages.length) return;
-  const { error } = await supabase
+  if (!_currentSchoolId || !messages.length) return { queued: 0, sent: 0 };
+  const { data, error } = await supabase
     .from('sms_messages')
-    .insert(messages.map(m => ({
+    .insert(messages.map((m) => ({
       school_id: _currentSchoolId,
       phone_number: m.phone,
       message: m.message,
       type: m.type || 'general',
-      status: 'queued'
-    })));
+      status: 'queued',
+    })))
+    .select('id');
   if (error) throw error;
+  const ids = (data || []).map((row) => row.id);
+  if (!ids.length) return { queued: 0, sent: 0, ids: [] };
+  const { data: dispatched, error: dispatchError } = await supabase.functions.invoke('communications-send', {
+    body: { action: 'dispatch_queued', channel: 'sms', messageIds: ids },
+  });
+  return { queued: ids.length, sent: Number(dispatched?.accepted_count || 0), failed: Number(dispatched?.failed_count || 0), ids, dispatchError: dispatchError?.message || null, dispatch: dispatched || null };
 }
 
-export async function testSmsConnection(config) {
-  const key = config.api_key?.includes('...********')
-    ? await decrypt(config._encrypted?.api_key, _currentSchoolId)
-    : config.api_key;
-
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      if (!key) {
-        resolve({ success: false, message: 'API Key is required.' });
-      } else if (key.length < 20) {
-        resolve({ success: false, message: 'API Key appears to be too short or invalid.' });
-      } else {
-        resolve({ success: true, message: 'Connection to Africa\'s Talking API successful!' });
-      }
-    }, 1200);
+export async function testSmsConnection() {
+  const { data, error } = await supabase.functions.invoke('communications-send', {
+    body: { action: 'test_connection', channel: 'sms' },
   });
+  if (error) return { success: false, message: error.message || 'SMS provider test failed.' };
+  return data || { success: false, message: 'SMS provider returned no test result.' };
 }
 
 export async function logCommunication(comm) {
@@ -134,30 +128,32 @@ export async function logCommunication(comm) {
 }
 
 export async function sendSMSMessage(recipients, message) {
-  const count = Array.isArray(recipients) ? recipients.length : 1;
-
-  return { success: true, count };
+  const list = Array.isArray(recipients) ? recipients : [recipients];
+  const { data, error } = await supabase.functions.invoke('communications-send', {
+    body: { action: 'send', channel: 'sms', recipients: list, message, type: 'broadcast' },
+  });
+  if (error) throw new Error(error.message || 'SMS dispatch failed.');
+  if (data?.error) throw new Error(data.error);
+  return data;
 }
 
 export async function sendWhatsAppMessage(recipients, message) {
-  const count = Array.isArray(recipients) ? recipients.length : 1;
-  if (count === 1) {
-    const phone = Array.isArray(recipients) ? recipients[0] : recipients;
-    const cleanPhone = phone.replace(/[^0-9]/g, '');
-    const url = `https://wa.me/${cleanPhone.startsWith('0') ? '254' + cleanPhone.slice(1) : cleanPhone}?text=${encodeURIComponent(message)}`;
-    window.open(url, '_blank');
-  }
-
-  return { success: true, count };
+  const list = Array.isArray(recipients) ? recipients : [recipients];
+  const { data, error } = await supabase.functions.invoke('communications-send', {
+    body: { action: 'send', channel: 'whatsapp', recipients: list, message, type: 'broadcast' },
+  });
+  if (error) throw new Error(error.message || 'WhatsApp dispatch failed.');
+  if (data?.error) throw new Error(data.error);
+  return data;
 }
 
 export function getWhatsAppLink(phone, message = '') {
-  const cleanPhone = (phone || '').replace(/[^0-9]/g, '');
-  const prefix = cleanPhone.startsWith('0') ? '254' : '';
-  return `https://wa.me/${prefix}${cleanPhone}${message ? '?text=' + encodeURIComponent(message) : ''}`;
+  const clean = String(phone || '').replace(/\D/g, '');
+  const normalized = clean.startsWith('0') ? '254' + clean.slice(1) : (clean.length === 9 ? '254' + clean : clean);
+  if (!/^254[17]\d{8}$/.test(normalized)) throw new Error('Invalid Kenyan phone number.');
+  return 'https://wa.me/' + normalized + (message ? '?text=' + encodeURIComponent(message) : '');
 }
 
 export async function getCommunicationLogs() {
-  // Mock history for now to satisfy UI
-  return [];
+  return getSMSLogs();
 }

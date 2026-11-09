@@ -25,6 +25,7 @@ export default function Dashboard({ currentUser, onLogout, currentPeriodId }) {
   const [loading, setLoading] = useState(true);
   const [periods, setPeriods] = useState([]);
   const [isAccountActive, setIsAccountActive] = useState(true);
+  const [dataLoadErrors, setDataLoadErrors] = useState([]);
   const [showWizard, setShowWizard] = useState(false);
   const { features } = useFeatures();
   const feat = (slug) => features[slug]?.enabled === true;
@@ -32,11 +33,12 @@ export default function Dashboard({ currentUser, onLogout, currentPeriodId }) {
   useEffect(() => {
     const loadData = async () => {
       try {
-        const wrap = async (p, fb = []) => { try { return await p; } catch(e) { console.error(e); return fb; } };
+        const loadErrors = [];
+        const wrap = async (p, fb = [], label = 'Dashboard data') => { try { return await p; } catch(e) { console.error(label, e); loadErrors.push(label + ': ' + (e?.message || 'load failed')); return fb; } };
         const [students, fees, marks, teachers, profile, attendance, adminUsers, platformSettings, allPeriods, portalActivity] = await Promise.all([
-          wrap(getStudents()), wrap(getFees(), {}), wrap(getMarks(), {}), wrap(getTeachers()), 
-          wrap(getSchoolProfile(), {}), wrap(getAttendance(), {}), wrap(getUsers()), 
-          wrap(getPlatformSettings(), {}), wrap(getPeriods()), wrap(getPortalActivity(5))
+          wrap(getStudents(), [], 'Students'), wrap(getFees(), {}, 'Fees'), wrap(getMarks(), {}, 'Marks'), wrap(getTeachers(), [], 'Teachers'),
+          wrap(getSchoolProfile(), {}, 'School profile'), wrap(getAttendance(), {}, 'Attendance'), wrap(getUsers(), [], 'Staff users'),
+          wrap(getPlatformSettings(), {}, 'Platform settings'), wrap(getPeriods(), [], 'Academic periods'), wrap(getPortalActivity(5), [], 'Portal activity')
         ]);
         
         const prof = profile || {};
@@ -46,9 +48,9 @@ export default function Dashboard({ currentUser, onLogout, currentPeriodId }) {
 
         const todayStr = getTodayStr();
         const [feeSummary, todayAtt, schoolStructure] = await Promise.all([
-          wrap(getFeeSummary(fees, students, prof), { totalExpected:0, totalCollected:0, totalOutstanding:0, fullyPaid:0, partialPaid:0, unpaid:0 }),
-          wrap(getAttendanceSummary(todayStr, attendance), { present:0, late:0, absent:0, total:0, percentage:0 }),
-          wrap(getSchoolStructure(students, marks, prof), {})
+          wrap(getFeeSummary(fees, students, prof), { totalExpected:0, totalCollected:0, totalOutstanding:0, fullyPaid:0, partialPaid:0, unpaid:0 }, 'Fee summary'),
+          wrap(getAttendanceSummary(todayStr, attendance, students, 'Morning'), { present:0, late:0, absent:0, total:students.length, percentage:0 }, 'Attendance summary'),
+          wrap(getSchoolStructure(students, marks, prof), {}, 'School structure')
         ]);
         const allPayments = [];
         students.forEach(s => {
@@ -58,7 +60,9 @@ export default function Dashboard({ currentUser, onLogout, currentPeriodId }) {
         allPayments.sort((a, b) => new Date(b.date) - new Date(a.date));
         const collectionRate = feeSummary.totalExpected > 0
           ? ((feeSummary.totalCollected / feeSummary.totalExpected) * 100).toFixed(1) : 0;
+        setDataLoadErrors(loadErrors);
         const newData = {
+          dataLoadErrors: loadErrors,
           totalStudents: students.length, totalTeachers: teachers.length,
           collectionRate: Number(collectionRate), feeSummary,
           attendance: todayAtt, recentPayments: allPayments.slice(0, 5),
@@ -73,6 +77,7 @@ export default function Dashboard({ currentUser, onLogout, currentPeriodId }) {
         setShowWizard(!prof?.setup_completed);
       } catch (err) {
         console.error(err);
+        setDataLoadErrors([err?.message || 'Dashboard data could not be loaded.']);
         setData({
           totalStudents: 0, totalTeachers: 0, collectionRate: 0,
           feeSummary: { totalExpected:0, totalCollected:0, totalOutstanding:0, fullyPaid:0, partialPaid:0, unpaid:0 },
@@ -151,6 +156,13 @@ export default function Dashboard({ currentUser, onLogout, currentPeriodId }) {
     { icon:<UserIcon size={20} />,    label:'Seat Usage',        value: `${totalStaff}/${seatLimit}`, color:'#64748b', bg:'#f1f5f9', show: !isTeacher && !isFinance && !isLibrarian },
   ].filter(k => k.show);
 
+  const quickActions = [
+    { to: '/students', title: 'Students', detail: 'Find and manage learner records', icon: <StudentIcon size={18} />, show: true },
+    { to: '/attendance', title: 'Attendance', detail: "Mark today’s class attendance", icon: <BookIcon size={18} />, show: !isFinance && !isLibrarian && feat('attendance') },
+    { to: '/fees', title: 'Record payment', detail: 'Post a student fee payment', icon: <CardIcon size={18} />, show: !isTeacher && !isLibrarian && feat('fees') },
+    { to: '/communications', title: 'Send message', detail: 'Reach parents and staff', icon: <UserIcon size={18} />, show: (role === 'admin' || isFinance) && feat('communications') },
+  ].filter(action => action.show);
+
   return (
     <div className="animate-fade-up">
       <Helmet>
@@ -195,6 +207,14 @@ export default function Dashboard({ currentUser, onLogout, currentPeriodId }) {
         </div>
       </div>
 
+      {dataLoadErrors.length > 0 && (
+        <div role="alert" className="card" style={{ marginBottom: 16, border: '1px solid var(--warning, #d97706)', padding: 14 }}>
+          <strong>Some dashboard information could not be loaded.</strong>
+          <div style={{ fontSize: '0.82rem', marginTop: 6 }}>{dataLoadErrors.join(' • ')}</div>
+          <div style={{ fontSize: '0.75rem', marginTop: 4, color: 'var(--text-muted)' }}>Numbers for failed sources may be incomplete. Check your connection and reload before making operational decisions.</div>
+        </div>
+      )}
+
       {/* KPI Cards */}
       <div className="kpi-grid" style={{ '--kpi-cols': kpis.length }}>
         {kpis.map((k, i) => (
@@ -211,6 +231,30 @@ export default function Dashboard({ currentUser, onLogout, currentPeriodId }) {
       </div>
 
 
+
+      {/* Frequently used tasks */}
+      {quickActions.length > 0 && (
+        <section className="quick-actions-section" aria-label="Quick actions">
+          <div className="quick-actions-heading">
+            <div>
+              <h3>Quick actions</h3>
+              <p>Get straight to the tasks your school handles every day.</p>
+            </div>
+          </div>
+          <div className="quick-actions-grid">
+            {quickActions.map(action => (
+              <Link to={action.to} className="quick-action-card" key={action.to}>
+                <span className="quick-action-icon" aria-hidden="true">{action.icon}</span>
+                <span className="quick-action-copy">
+                  <strong>{action.title}</strong>
+                  <span>{action.detail}</span>
+                </span>
+                <span className="quick-action-arrow" aria-hidden="true">→</span>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Main Grid - Recent Activity + Portal Activity */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 18, marginBottom: 24 }}>

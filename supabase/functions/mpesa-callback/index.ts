@@ -1,130 +1,65 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
+import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 serve(async (req) => {
   try {
     const url = new URL(req.url);
-    const callbackToken = url.searchParams.get('token');
+    const suppliedToken = url.searchParams.get('token');
     const expectedToken = Deno.env.get('MPESA_CALLBACK_TOKEN');
-
-    if (!expectedToken || callbackToken !== expectedToken) {
-      console.error('Unauthorized callback attempt. Invalid or missing token.');
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
+    if (!expectedToken || suppliedToken !== expectedToken) {
+      return new Response(JSON.stringify({ error: 'Unauthorized callback.' }), {
+        status: 401, headers: { 'Content-Type': 'application/json' },
+      });
     }
 
     const body = await req.json();
-    const stkCallback = body?.Body?.stkCallback;
-
-    if (!stkCallback) {
-      console.error('Unrecognized M-Pesa callback shape:', JSON.stringify(body));
-      return new Response(JSON.stringify({ ResultCode: 0, ResultDesc: 'Accepted' }), { status: 200 });
+    const callback = body?.Body?.stkCallback;
+    if (!callback?.CheckoutRequestID) {
+      return new Response(JSON.stringify({ ResultCode: 1, ResultDesc: 'Invalid callback payload.' }), {
+        status: 400, headers: { 'Content-Type': 'application/json' },
+      });
     }
 
-    const { MerchantRequestID, CheckoutRequestID, ResultCode, ResultDesc } = stkCallback;
+    const items = callback.CallbackMetadata?.Item || [];
+    const getValue = (name: string) => items.find((item: any) => item.Name === name)?.Value;
+    const receipt = getValue('MpesaReceiptNumber');
+    const amount = getValue('Amount');
+    const transactionDate = getValue('TransactionDate');
+    const phone = getValue('PhoneNumber');
 
-    const supabaseAdmin = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    const admin = createClient(
+      Deno.env.get('SUPABASE_URL') || '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '',
     );
 
-    // 1. Locate the pending callback row
-    const { data: pending, error: findError } = await supabaseAdmin
-      .from('mpesa_callbacks')
-      .select('*')
-      .eq('checkout_request_id', CheckoutRequestID)
-      .maybeSingle();
+    // The database function locks the callback and fee rows and writes the
+    // receipt + fee ledger + final callback status in one transaction.
+    const { data, error } = await admin.rpc('process_mpesa_stk_callback', {
+      p_checkout_request_id: callback.CheckoutRequestID,
+      p_result_code: Number(callback.ResultCode ?? -1),
+      p_result_desc: String(callback.ResultDesc || ''),
+      p_receipt_no: receipt == null ? null : String(receipt),
+      p_amount: amount == null ? null : Number(amount),
+      p_transaction_date: transactionDate == null ? null : String(transactionDate),
+      p_payer_phone: phone == null ? null : String(phone),
+    });
 
-    if (findError || !pending) {
-      console.error(`No matching mpesa_callbacks row for CheckoutRequestID ${CheckoutRequestID}`);
-      return new Response(JSON.stringify({ ResultCode: 0, ResultDesc: 'Accepted' }), { status: 200 });
+    if (error) {
+      console.error('M-Pesa callback ledger transaction failed:', error.message);
+      // Do not mark the callback completed. A retry/reconciliation can process it.
+      return new Response(JSON.stringify({ ResultCode: 1, ResultDesc: 'Payment ledger processing failed. Please retry.' }), {
+        status: 500, headers: { 'Content-Type': 'application/json' },
+      });
     }
 
-    // 2. Idempotency check: if already completed, do NOT double credit
-    if (pending.status === 'completed' || pending.status === 'processed') {
-      console.log(`Duplicate callback received for CheckoutRequestID ${CheckoutRequestID}. Already processed.`);
-      return new Response(JSON.stringify({ ResultCode: 0, ResultDesc: 'Accepted' }), { status: 200 });
-    }
-
-    // 3. Process outcome
-    if (ResultCode === 0) {
-      const items = stkCallback.CallbackMetadata?.Item || [];
-      const getVal = (name: string) => items.find((i: any) => i.Name === name)?.Value;
-      const receiptNo = String(getVal('MpesaReceiptNumber') || '').trim();
-      const confirmedAmount = Number(getVal('Amount') || pending.amount);
-      const transactionDate = getVal('TransactionDate');
-      const payerPhone = getVal('PhoneNumber');
-
-      // Update callback record
-      await supabaseAdmin.from('mpesa_callbacks').update({
-        status: 'completed',
-        result_code: ResultCode,
-        mpesa_receipt_number: receiptNo,
-        amount: confirmedAmount,
-        transaction_date: transactionDate,
-        phone_number: payerPhone,
-        result_desc: ResultDesc,
-        updated_at: new Date().toISOString()
-      }).eq('id', pending.id);
-
-      // Reconcile fee ledger idempotently
-      if (pending.bill_ref_number && pending.school_id) {
-        const { data: student } = await supabaseAdmin
-          .from('students')
-          .select('id')
-          .eq('school_id', pending.school_id)
-          .or(`adm_no.eq.${pending.bill_ref_number},id.eq.${pending.bill_ref_number}`)
-          .maybeSingle();
-
-        if (student) {
-          const { data: fee } = await supabaseAdmin
-            .from('fees')
-            .select('id, balance, paid')
-            .eq('student_id', student.id)
-            .maybeSingle();
-
-          if (fee) {
-            // Check if payment with this receipt already recorded
-            const { data: existingPayment } = await supabaseAdmin
-              .from('fee_payments')
-              .select('id')
-              .eq('reference', receiptNo)
-              .maybeSingle();
-
-            if (!existingPayment) {
-              await supabaseAdmin.from('fee_payments').insert({
-                fee_id: fee.id,
-                amount: confirmedAmount,
-                method: 'M-Pesa',
-                reference: receiptNo,
-                receipt_number: receiptNo,
-                date: new Date().toISOString(),
-                status: 'Confirmed'
-              });
-
-              await supabaseAdmin.from('fees').update({
-                paid: (Number(fee.paid) || 0) + confirmedAmount,
-                balance: (Number(fee.balance) || 0) - confirmedAmount
-              }).eq('id', fee.id);
-            }
-          }
-        }
-      }
-    } else {
-      // Payment failed / cancelled / timed out
-      await supabaseAdmin.from('mpesa_callbacks').update({
-        status: 'failed',
-        result_code: ResultCode,
-        result_desc: ResultDesc,
-        updated_at: new Date().toISOString()
-      }).eq('id', pending.id);
-    }
-
+    console.log('M-Pesa callback processed:', data);
     return new Response(JSON.stringify({ ResultCode: 0, ResultDesc: 'Accepted' }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
+      status: 200, headers: { 'Content-Type': 'application/json' },
     });
   } catch (error) {
-    console.error('mpesa-callback error:', error.message);
-    return new Response(JSON.stringify({ ResultCode: 0, ResultDesc: 'Accepted' }), { status: 200 });
+    console.error('M-Pesa callback handler error:', error?.message || error);
+    return new Response(JSON.stringify({ ResultCode: 1, ResultDesc: 'Callback could not be processed.' }), {
+      status: 500, headers: { 'Content-Type': 'application/json' },
+    });
   }
 });
