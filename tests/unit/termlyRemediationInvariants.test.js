@@ -42,9 +42,9 @@ describe('Termly remediation regression invariants', () => {
   });
 
   it('keeps the academic period from STK initiation and checks duplicate receipts', () => {
-    const applier = read('termly-remediation-kit/apply-termly-remediation.mjs');
+    const stk = read('supabase/functions/mpesa-stk-push/index.ts');
     const migration = read('supabase/migrations/20261108224600_termly_reliability_remediation.sql');
-    expect(applier).toContain('period_id: feeRecord.period_id');
+    expect(stk).toContain('period_id: feeRecord.period_id');
     expect(migration).toContain('ADD COLUMN IF NOT EXISTS period_id UUID REFERENCES public.academic_periods(id)');
     expect(migration).toContain('WHERE ap.id = v_callback.period_id AND ap.school_id = v_callback.school_id');
     expect(migration).toContain("pg_advisory_xact_lock(hashtext(v_callback.school_id::TEXT || ':' || v_receipt))");
