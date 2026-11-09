@@ -99,6 +99,7 @@ export default function PortalDashboard({ user, onLogout }) {
   const [examResults, setExamResults] = useState([]);
   const [cbcProgress, setCbcProgress] = useState([]);
   const [myBooks, setMyBooks] = useState([]);
+  const [bookLoadError, setBookLoadError] = useState('');
   const [academic, setAcademic] = useState({ average: 0, grade: 'N/A', rank: '-', color: '#667781' });
   const [feeBalance, setFeeBalance] = useState(0);
   const [feeSummary, setFeeSummary] = useState({ billed: 0, paid: 0 });
@@ -192,8 +193,15 @@ export default function PortalDashboard({ user, onLogout }) {
         });
         setMySubmissions(subMap);
 
-        const books = await getStudentBooks(activeId).catch(() => []);
-        setMyBooks(books);
+        try {
+          const books = await getStudentBooks(activeId);
+          setMyBooks(Array.isArray(books) ? books : []);
+          setBookLoadError('');
+        } catch (bookError) {
+          console.warn('[Portal] Library loans could not be loaded:', bookError);
+          setMyBooks([]);
+          setBookLoadError('We could not load the library records right now. Please refresh or contact the school library.');
+        }
         
         if (examRes.length > 0) {
           const avg = examRes.reduce((acc, curr) => {
@@ -570,20 +578,28 @@ export default function PortalDashboard({ user, onLogout }) {
 
                   <section style={{ marginTop: 24 }}>
                     <h4 style={{ fontSize: '1.05rem', fontWeight: 800, marginBottom: 14, color: '#0f172a' }}>Library Books</h4>
-                    {myBooks.length === 0 ? (
+                    {bookLoadError ? (
+                      <Card style={{ padding: '24px', color: '#b45309', background: '#fffbeb' }}>
+                        <div style={{ fontSize: '0.9rem', fontWeight: 700 }}>Library records unavailable</div>
+                        <div style={{ fontSize: '0.82rem', marginTop: 6 }}>{bookLoadError}</div>
+                      </Card>
+                    ) : myBooks.length === 0 ? (
                       <Card style={{ padding: '32px', textAlign: 'center', color: '#94a3b8' }}>
                         <div style={{ fontSize: '0.9rem' }}>No books currently borrowed.</div>
                       </Card>
                     ) : (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                         {myBooks.map(book => (
-                          <Card key={book.id} style={{ padding: 18, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
-                            <div>
-                              <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '0.95rem' }}>{book.title || 'Untitled book'}</div>
-                              <div style={{ fontSize: '0.78rem', color: '#94a3b8', marginTop: 2 }}>Copy {book.copy_code || 'N/A'}</div>
+                          <Card key={book.id} style={{ padding: 18, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+                            <div style={{ minWidth: 180, flex: 1 }}>
+                              <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.95rem' }}>{book.title || 'Untitled book'}</div>
+                              {book.author && <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: 3 }}>By {book.author}</div>}
+                              <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: 5 }}>
+                                Copy {book.copy_code || 'N/A'}{book.issue_date ? ` · Borrowed ${new Date(book.issue_date).toLocaleDateString()}` : ''}
+                              </div>
                             </div>
                             <Badge bg={book.is_overdue ? '#fef2f2' : '#f0fdf4'} color={book.is_overdue ? '#ef4444' : '#10b981'}>
-                              {book.is_overdue ? 'Overdue' : 'Due'} {book.due_date ? new Date(book.due_date).toLocaleDateString() : 'N/A'}
+                              {book.is_overdue ? 'Overdue' : 'Due'} {book.due_date ? new Date(book.due_date).toLocaleDateString() : 'date not set'}
                             </Badge>
                           </Card>
                         ))}
