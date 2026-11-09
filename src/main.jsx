@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import App from './App'
 import './pages/App.css'
 import './index.css'
+import './styles/termly-ui-refresh.css'
 import { initStore } from './data/coreStore';
 import { BrowserRouter, HashRouter } from 'react-router-dom';
 

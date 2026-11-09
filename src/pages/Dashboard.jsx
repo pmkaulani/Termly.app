@@ -156,6 +156,13 @@ export default function Dashboard({ currentUser, onLogout, currentPeriodId }) {
     { icon:<UserIcon size={20} />,    label:'Seat Usage',        value: `${totalStaff}/${seatLimit}`, color:'#64748b', bg:'#f1f5f9', show: !isTeacher && !isFinance && !isLibrarian },
   ].filter(k => k.show);
 
+  const quickActions = [
+    { to: '/students', title: 'Students', detail: 'Find and manage learner records', icon: <StudentIcon size={18} />, show: true },
+    { to: '/attendance', title: 'Attendance', detail: "Mark today’s class attendance", icon: <BookIcon size={18} />, show: !isFinance && !isLibrarian && feat('attendance') },
+    { to: '/fees', title: 'Record payment', detail: 'Post a student fee payment', icon: <CardIcon size={18} />, show: !isTeacher && !isLibrarian && feat('fees') },
+    { to: '/communications', title: 'Send message', detail: 'Reach parents and staff', icon: <UserIcon size={18} />, show: (role === 'admin' || isFinance) && feat('communications') },
+  ].filter(action => action.show);
+
   return (
     <div className="animate-fade-up">
       <Helmet>
@@ -224,6 +231,30 @@ export default function Dashboard({ currentUser, onLogout, currentPeriodId }) {
       </div>
 
 
+
+      {/* Frequently used tasks */}
+      {quickActions.length > 0 && (
+        <section className="quick-actions-section" aria-label="Quick actions">
+          <div className="quick-actions-heading">
+            <div>
+              <h3>Quick actions</h3>
+              <p>Get straight to the tasks your school handles every day.</p>
+            </div>
+          </div>
+          <div className="quick-actions-grid">
+            {quickActions.map(action => (
+              <Link to={action.to} className="quick-action-card" key={action.to}>
+                <span className="quick-action-icon" aria-hidden="true">{action.icon}</span>
+                <span className="quick-action-copy">
+                  <strong>{action.title}</strong>
+                  <span>{action.detail}</span>
+                </span>
+                <span className="quick-action-arrow" aria-hidden="true">→</span>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Main Grid - Recent Activity + Portal Activity */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 18, marginBottom: 24 }}>

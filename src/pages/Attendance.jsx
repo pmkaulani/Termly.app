@@ -101,6 +101,22 @@ export default function Attendance({ currentUser, currentPeriodId }) {
   };
 
   const markAllPresent = async () => {
+    if (students.length === 0) return;
+
+    const scope = [
+      selectedClass === 'All' ? 'all classes' : selectedClass,
+      streamFilter === 'All' ? 'all streams' : streamFilter + ' stream',
+      selectedSession.toLowerCase(),
+      selectedDate,
+    ].join(' · ');
+    const ok = await confirm({
+      title: 'Mark all students present?',
+      message: 'This will mark ' + students.length + ' students as present for ' + scope + '. Check the class and session before continuing.',
+      confirmText: 'Mark all present',
+      variant: 'warning',
+    });
+    if (!ok) return;
+
     setLoading(true);
     try {
       await markAttendanceBatch(selectedDate, students, 'present', selectedSession);

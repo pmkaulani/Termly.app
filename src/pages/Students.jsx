@@ -310,7 +310,7 @@ export default function Students({ currentUser, currentPeriodId }) {
           {loading && students.length === 0 ? (
             <SkeletonTable rows={10} columns={7} />
           ) : (
-          <table className="data-table responsive-table" style={{ minWidth: 1000 }}>
+          <table className="data-table responsive-table">
             <thead>
               <tr>
                 <th>Adm No</th><th>Full Name</th><th>Class</th>
