@@ -1,0 +1,7 @@
+/* Copy/replace this file using: node scripts/configure-runtime.mjs */
+window.__TERMLY_RUNTIME_CONFIG__ = Object.freeze({
+  deploymentMode: 'school-hosted',
+  supabaseUrl: 'https://api.termly.school.example',
+  supabaseAnonKey: 'REPLACE_WITH_SUPABASE_PUBLISHABLE_KEY',
+  allowInsecureLan: false
+});
