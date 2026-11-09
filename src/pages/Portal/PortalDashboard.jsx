@@ -7,7 +7,8 @@ import {
   ClockIcon, SchoolIcon, BellIcon
 } from '../../components/CommonIcons';
 import { Helmet } from 'react-helmet-async';
-import { getAssignments, getStudentSubmissions } from '../../data/offlineStore';
+// Student assignments and submissions are loaded from the secured cloud RPC.
+
 import { getStudentExamResults, getGradeForScore, getStudentProfile, getAnnouncements, getSubjectDetails, getStudentCBCProgress, getPeriods, getStudentAssignments } from '../../data/academicsStore';
 import { generateReportCard, downloadReportCardPDF, downloadCBCReportCardPDF } from '../../utils/reportCard';
 import { printReceipt, printFeeStatement } from '../../utils/receiptPrint';
@@ -180,16 +181,15 @@ export default function PortalDashboard({ user, onLogout }) {
         if (freshStudent && freshStudent.id === activeId) setLocalUser(freshStudent);
         setSubjectTeachers(teachers);
         
-        // getAssignments expects a class-name string, not an object.
-        const asts = activeClass ? await getAssignments(activeClass).catch(() => []) : [];
-        setAssignments(asts);
+        const asts = activeId ? await getStudentAssignments(activeId) : [];
+        setAssignments(Array.isArray(asts) ? asts : []);
         setExamResults(examRes);
         setCbcProgress(cbcData);
         setNotices(schoolNotices);
-        
-        const subs = await getStudentSubmissions(activeId).catch(() => []);
         const subMap = {};
-        subs.forEach(s => { subMap[s.assignment_id] = s; });
+        (Array.isArray(asts) ? asts : []).forEach((assignment) => {
+          if (assignment.submission) subMap[assignment.id] = assignment.submission;
+        });
         setMySubmissions(subMap);
 
         const books = await getStudentBooks(activeId).catch(() => []);

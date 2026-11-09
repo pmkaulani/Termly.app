@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { getStudents } from '../data/studentStore';
-import { getAttendance, markAttendance, getAttendanceSummary, getTodayStr, getSubjectAssignments } from '../data/academicsStore';
+import { getAttendance, markAttendance, markAttendanceBatch, getAttendanceSummary, getTodayStr, getSubjectAssignments } from '../data/academicsStore';
 import { getSchoolProfile, isFeatureEnabled, getPrintHeader } from '../data/coreStore';
 import { queueSmsBatch } from '../data/smsStore';;
 import { CBC_STRUCTURE } from '../data/seedData';
@@ -103,7 +103,7 @@ export default function Attendance({ currentUser, currentPeriodId }) {
   const markAllPresent = async () => {
     setLoading(true);
     try {
-      await Promise.all(students.map(s => markAttendance(selectedDate, s.id, 'present', selectedSession)));
+      await markAttendanceBatch(selectedDate, students, 'present', selectedSession);
       await refresh();
     } catch(err) { alert({ title: 'Attendance Error', message: err.message, variant: 'danger' }); }
     finally { setLoading(false); }
@@ -186,7 +186,8 @@ export default function Attendance({ currentUser, currentPeriodId }) {
               let presentCount = 0;
               let trackedDays = 0;
               const row = dates.map(d => {
-                const status = allAtt[d]?.[s.id];
+                const record = allAtt[d]?.[s.id];
+                const status = typeof record === 'string' ? record : record?.[selectedSession];
                 if (status) trackedDays++;
                 if (status === 'present' || status === 'late') presentCount++;
                 const char = status === 'present' ? 'P' : status === 'late' ? 'L' : status === 'absent' ? 'A' : '—';
@@ -462,7 +463,7 @@ export default function Attendance({ currentUser, currentPeriodId }) {
               </p>
               
               <div style={{ maxHeight: 200, overflowY: 'auto', background: 'var(--bg)', padding: 12, borderRadius: 8, border: '1px solid var(--border)', marginBottom: 20 }}>
-                {students.filter(s => attendance[s.id] === 'absent').map(s => (
+                {students.filter(s => (attendance[s.id]?.[selectedSession] || attendance[s.id]) === 'absent').map(s => (
                   <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', padding: '4px 0', borderBottom: '1px solid var(--border)' }}>
                     <span>{s.name} ({s.class})</span>
                     <span style={{ color: 'var(--text-light)' }}>{s.parent_phone || 'No Phone'}</span>

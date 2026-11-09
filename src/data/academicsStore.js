@@ -638,15 +638,13 @@ export async function getExamPapers(examId) {
   if (!_currentAuthUser && _currentSchoolId) {
     // Portal mode: Fetch papers via RPC (usually for teachers entering marks)
     // Use teacher_record_id if available (from staff login), otherwise fall back to userId
-    const teacherId = _currentUserId;
-    console.log('[PORTAL] Fetching papers for teacher:', teacherId, 'exam:', examId);
-    const { data, error } = await supabase.rpc('portal_get_teacher_papers', { 
-      p_teacher_id: teacherId, 
-      p_exam_id: examId 
-    });
+    console.log('[PORTAL] Fetching papers for exam:', examId);
+    // supabase.rpc wrapper injects the verified portal token. The SQL function
+    // accepts p_exam_id and p_token only; never send a client-selected teacher id.
+    const { data, error } = await supabase.rpc('portal_get_teacher_papers', { p_exam_id: examId });
     if (error) {
-      console.warn('portal_get_teacher_papers error:', error.message);
-      return [];
+      console.error('portal_get_teacher_papers failed:', error.message);
+      throw error;
     }
     return data || [];
   }
@@ -1201,46 +1199,79 @@ export async function applyFeeStructure() {
 // ============= ATTENDANCE =============
 export async function getAttendance() {
   if (!_currentSchoolId || !_currentPeriodId) return {};
-  const cacheKey = `att_${_currentSchoolId}_${_currentPeriodId}`;
+  const cacheKey = 'att_' + _currentSchoolId + '_' + _currentPeriodId;
   return cachedQuery(cacheKey, async () => {
-    const { data, error } = await supabase
-      .from('attendance')
-      .select('id, student_id, date, status, period_id, school_id')
-      .eq('school_id', _currentSchoolId)
-      .eq('period_id', _currentPeriodId);
+    const { data, error } = await supabase.from('attendance')
+      .select('id, student_id, date, status, session, period_id, school_id')
+      .eq('school_id', _currentSchoolId).eq('period_id', _currentPeriodId);
     if (error) throw error;
-    // Convert to { date: { studentId: status } }
-    const att = {};
-    (data || []).forEach(row => {
-      if (!att[row.date]) att[row.date] = {};
-      att[row.date][row.student_id] = row.status;
+    const attendance = {};
+    (data || []).forEach((row) => {
+      if (!attendance[row.date]) attendance[row.date] = {};
+      const session = row.session || 'Morning';
+      const current = attendance[row.date][row.student_id];
+      attendance[row.date][row.student_id] = { ...(typeof current === 'object' ? current : {}), [session]: row.status };
     });
-    return att;
+    return attendance;
   });
 }
 
-export async function markAttendance(date, studentId, status) {
-  const { error } = await supabase
-    .from('attendance')
-    .upsert(
-      { school_id: _currentSchoolId, date, student_id: studentId, status, period_id: _currentPeriodId },
-      { onConflict: 'school_id,date,student_id,period_id' }
-    );
+export async function markAttendance(date, studentId, status, session = 'Morning') {
+  if (!_currentSchoolId || !_currentPeriodId) throw new Error('School and academic period are required to mark attendance.');
+  const row = { school_id: _currentSchoolId, date, student_id: studentId, status, period_id: _currentPeriodId, session: session || 'Morning' };
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    const { queueChange, syncTypes } = await import('./offlineStore.js');
+    await queueChange(syncTypes.ADD_ATTENDANCE, row);
+    return { queued: true };
+  }
+  const { error } = await supabase.from('attendance').upsert(row, {
+    onConflict: 'school_id,date,student_id,period_id,session',
+  });
   if (error) throw error;
+  invalidateCache('att_' + _currentSchoolId + '_' + _currentPeriodId);
+  return { success: true };
 }
 
-export async function getAttendanceSummary(date, preFetchedAttendance = null) {
-  const att = preFetchedAttendance || await getAttendance();
-  const entries = Object.values(att[date] || {});
-  const present = entries.filter(v => v === 'present').length;
-  const late = entries.filter(v => v === 'late').length;
-  const absent = entries.filter(v => v === 'absent').length;
-  const total = entries.length;
+export async function markAttendanceBatch(date, students, status, session = 'Morning') {
+  if (!Array.isArray(students) || students.length === 0) return { count: 0 };
+  if (!_currentSchoolId || !_currentPeriodId) throw new Error('School and academic period are required to mark attendance.');
+  const rows = students.map((student) => ({
+    school_id: _currentSchoolId, date, student_id: student.id, status,
+    period_id: _currentPeriodId, session: session || 'Morning',
+  }));
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    const { queueChange, syncTypes } = await import('./offlineStore.js');
+    await Promise.all(rows.map((row) => queueChange(syncTypes.ADD_ATTENDANCE, row)));
+    return { queued: rows.length, count: rows.length };
+  }
+  const { error } = await supabase.from('attendance').upsert(rows, {
+    onConflict: 'school_id,date,student_id,period_id,session',
+  });
+  if (error) throw error;
+  invalidateCache('att_' + _currentSchoolId + '_' + _currentPeriodId);
+  return { count: rows.length };
+}
+
+export async function getAttendanceSummary(date, preFetchedAttendance = null, roster = null, session = 'Morning') {
+  const attendance = preFetchedAttendance || await getAttendance();
+  const day = attendance[date] || {};
+  const values = (Array.isArray(roster) ? roster.map((student) => day[student.id]?.[session] || (typeof day[student.id] === 'string' ? day[student.id] : null))
+    : Object.values(day).map((value) => typeof value === 'object' ? value?.[session] : value)).filter(Boolean);
+  const present = values.filter((value) => value === 'present').length;
+  const late = values.filter((value) => value === 'late').length;
+  const absent = values.filter((value) => value === 'absent').length;
+  const total = Array.isArray(roster) ? roster.length : values.length;
   const percentage = total > 0 ? (((present + late) / total) * 100).toFixed(1) : 0;
   return { present, late, absent, total, percentage: Number(percentage) };
 }
 
-export function getTodayStr() { return new Date().toISOString().split('T')[0]; }
+export function getTodayStr() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return year + '-' + month + '-' + day;
+}
 
 // ============= CBC COMPETENCIES =============
 export async function getCBC() {
@@ -1886,52 +1917,6 @@ export async function fetchLmsContent(url) {
   try { return JSON.parse(text); } catch (e) { return text; }
 }
 
-export async function getAssignmentStats(assignmentId, className, stream) {
-  const { count: submitted } = await supabase.from('lms_submissions')
-    .select('*', { count: 'exact', head: true })
-    .eq('assignment_id', assignmentId);
-    
-  let query = supabase.from('students').select('*', { count: 'exact', head: true }).eq('class', className);
-  if (stream && stream !== 'General' && stream !== '') query = query.eq('stream', stream);
-  
-  const { count: total } = await query;
-  return { submitted: submitted || 0, total: total || Math.max(submitted || 0, 1) };
-}
-
-export async function getQuizAnalytics(assignmentId) {
-  const { data: ast, error: e1 } = await supabase.from('lms_assignments').select('quiz_config, max_score, title').eq('id', assignmentId).eq('school_id', _currentSchoolId).single();
-  if (e1) throw e1;
-  const { data: subs, error: e2 } = await supabase.from('lms_submissions').select('quiz_results, grade_numeric').eq('assignment_id', assignmentId);
-  if (e2) throw e2;
-
-  const totalSubmissions = subs.length;
-  if (totalSubmissions === 0) return { totalSubmissions: 0, questionStats: [] };
-
-  const questions = ast.quiz_config || [];
-  const questionStats = questions.map((q, idx) => {
-    let correctCount = 0;
-    subs.forEach(s => { if (s.quiz_results?.answers?.[idx]?.correct) correctCount++; });
-    return { id: q.id, text: q.text, successRate: (correctCount / totalSubmissions) * 100 };
-  });
-
-  const scores = subs.map(s => s.grade_numeric || 0);
-  return {
-    title: ast.title,
-    maxScore: ast.max_score,
-    totalSubmissions,
-    avgScore: (scores.reduce((a, b) => a + b, 0) / totalSubmissions).toFixed(1),
-    highestScore: Math.max(...scores),
-    lowestScore: Math.min(...scores),
-    questionStats
-  };
-}
-
-export async function updateSubmission(submissionId, updates) {
-  const { data, error } = await supabase.from('lms_submissions').update(updates).eq('id', submissionId).eq('school_id', _currentSchoolId).select().single();
-  if (error) throw error;
-  return data;
-}
-
 export async function getClasses() {
   if (!_currentSchoolId) return [];
   const { data, error } = await supabase
@@ -2043,42 +2028,123 @@ export async function saveTTWeeklyTarget({ classId, subjectId, minLessons, maxLe
 
 export async function createAssignment(assignment) {
   mutationGuard('createAssignment');
-  if (!_currentSchoolId) throw new Error('No school context');
-  
+  if (!_currentSchoolId) throw new Error('No school context.');
+  const { data: classRows, error: classError } = await supabase.from('classes').select('id, name, stream')
+    .eq('school_id', _currentSchoolId).eq('name', assignment.class);
+  if (classError) throw classError;
+  const classRow = (classRows || []).find((row) => String(row.stream || 'General') === String(assignment.stream || 'General'))
+    || ((classRows || []).length === 1 ? classRows[0] : null);
+  if (!classRow) throw new Error('Create/select the matching class and stream in School Structure before assigning work.');
+
+  const authUserId = _currentAuthUser?.id;
+  if (!authUserId) throw new Error('A signed-in staff account is required to create an assignment.');
+  const { data: teacher, error: teacherError } = await supabase.from('users').select('id, name')
+    .eq('auth_user_id', authUserId).eq('school_id', _currentSchoolId).single();
+  if (teacherError || !teacher) throw new Error('The signed-in staff account is not linked to a school user record.');
+
+  let subjectId = null;
+  if (assignment.subject) {
+    const { data: subject, error: subjectError } = await supabase.from('tt_subjects').select('id')
+      .eq('school_id', _currentSchoolId).eq('name', assignment.subject).maybeSingle();
+    if (subjectError) throw subjectError;
+    subjectId = subject?.id || null;
+  }
+
   const payload = {
     school_id: _currentSchoolId,
+    class_id: classRow.id,
+    subject_id: subjectId,
+    teacher_id: teacher.id,
     title: assignment.title,
-    class: assignment.class,
-    stream: assignment.stream,
-    subject: assignment.subject,
-    description: assignment.description,
-    links: assignment.links,
-    allow_from: assignment.allowFrom,
-    due_date: assignment.dueDate,
-    cutoff_date: assignment.cutoffDate,
-    max_score: assignment.maxScore,
-    submission_type: assignment.submissionType,
-    questions: assignment.questions,
-    teacher: assignment.teacher
+    description: assignment.description || null,
+    due_date: assignment.dueDate ? new Date(assignment.dueDate).toISOString() : null,
+    allow_from: assignment.allowFrom ? new Date(assignment.allowFrom).toISOString() : null,
+    cutoff_date: assignment.cutoffDate ? new Date(assignment.cutoffDate).toISOString() : null,
+    max_score: Number(assignment.maxScore || 100),
+    submission_type: assignment.submissionType || 'both',
+    stream: classRow.stream || assignment.stream || 'General',
+    questions: assignment.questions || [],
+    quiz_config: assignment.questions || [],
+    external_link: assignment.links || null,
+    links: assignment.links || null,
+    class: classRow.name,
+    class_label: classRow.name,
+    subject: assignment.subject || '',
+    subject_label: assignment.subject || null,
+    teacher: teacher.name || assignment.teacher || '',
+    teacher_name: teacher.name || assignment.teacher || null,
+    status: 'published',
+    published_at: new Date().toISOString(),
   };
-
-  const { data, error } = await supabase
-    .from('el_assignments')
-    .insert(payload)
-    .select()
-    .single();
+  const { data, error } = await supabase.from('el_assignments').insert(payload).select().single();
   if (error) throw error;
-  return data;
+  return { ...data, class: classRow.name, subject: assignment.subject, teacher: teacher.name };
+}
+
+export async function getAssignments(className = null) {
+  if (!_currentSchoolId) return [];
+  let query = supabase.from('el_assignments').select('*').eq('school_id', _currentSchoolId).order('created_at', { ascending: false });
+  if (className) query = query.eq('class_label', className);
+  const { data, error } = await query;
+  if (error) throw error;
+  const rows = data || [];
+  const classIds = [...new Set(rows.map((r) => r.class_id).filter(Boolean))];
+  const subjectIds = [...new Set(rows.map((r) => r.subject_id).filter(Boolean))];
+  const [classesRes, subjectsRes] = await Promise.all([
+    classIds.length ? supabase.from('classes').select('id, name, stream').in('id', classIds) : Promise.resolve({ data: [], error: null }),
+    subjectIds.length ? supabase.from('tt_subjects').select('id, name').in('id', subjectIds) : Promise.resolve({ data: [], error: null }),
+  ]);
+  if (classesRes.error) throw classesRes.error;
+  if (subjectsRes.error) throw subjectsRes.error;
+  const classes = new Map((classesRes.data || []).map((r) => [r.id, r]));
+  const subjects = new Map((subjectsRes.data || []).map((r) => [r.id, r]));
+  return rows.map((row) => {
+    const cls = classes.get(row.class_id);
+    const sub = subjects.get(row.subject_id);
+    return {
+      ...row,
+      class: row.class_label || cls?.name || '',
+      stream: row.stream || cls?.stream || 'General',
+      subject: row.subject_label || sub?.name || '',
+      teacher: row.teacher_name || '',
+      dueDate: row.due_date,
+      allowFrom: row.allow_from,
+      cutoffDate: row.cutoff_date,
+      links: row.external_link,
+      maxScore: row.max_score,
+      submissionType: row.submission_type,
+      questions: row.questions || row.quiz_config || [],
+    };
+  });
+}
+
+export async function getSubmissions(assignmentId) {
+  if (!_currentSchoolId || !assignmentId) return [];
+  const { data, error } = await supabase.from('el_submissions')
+    .select('*, students(id, name, adm_no, class)')
+    .eq('school_id', _currentSchoolId).eq('assignment_id', assignmentId)
+    .order('submitted_at', { ascending: true });
+  if (error) throw error;
+  return (data || []).map((row) => ({
+    ...row,
+    student_name: row.students?.name || row.student_name || 'Student',
+    grade_numeric: row.grade_numeric ?? row.score,
+    feedback: row.feedback ?? row.teacher_comment,
+    workflow_status: row.workflow_status || (row.status === 'graded' ? 'Ready for Release' : 'Submitted'),
+    timestamp: row.timestamp || row.submitted_at,
+  }));
 }
 
 export async function updateAssignment(id, updates) {
   mutationGuard('updateAssignment');
-  const { data, error } = await supabase
-    .from('el_assignments')
-    .update({ ...updates, updated_at: new Date().toISOString() })
-    .eq('id', id)
-    .select()
-    .single();
+  const allowed = ['title', 'description', 'due_date', 'allow_from', 'cutoff_date', 'max_score', 'submission_type', 'status', 'published_at', 'closed_at', 'questions', 'quiz_config', 'external_link', 'stream'];
+  const payload = {};
+  for (const key of allowed) if (updates[key] !== undefined) payload[key] = updates[key];
+  if (updates.dueDate !== undefined) payload.due_date = new Date(updates.dueDate).toISOString();
+  if (updates.cutoffDate !== undefined) payload.cutoff_date = new Date(updates.cutoffDate).toISOString();
+  payload.updated_at = new Date().toISOString();
+  const { data, error } = await supabase.from('el_assignments').update(payload)
+    .eq('id', id).eq('school_id', _currentSchoolId).select().single();
   if (error) throw error;
   return data;
 }
@@ -2086,15 +2152,77 @@ export async function updateAssignment(id, updates) {
 export async function publishAssignment(id) {
   return updateAssignment(id, { status: 'published', published_at: new Date().toISOString() });
 }
-
 export async function closeAssignment(id) {
   return updateAssignment(id, { status: 'closed', closed_at: new Date().toISOString() });
 }
-
 export async function deleteAssignment(id) {
   mutationGuard('deleteAssignment');
   const { error } = await supabase.from('el_assignments').delete().eq('id', id).eq('school_id', _currentSchoolId);
   if (error) throw error;
+}
+
+export async function getAssignmentStats(assignmentId, className, stream) {
+  const [submittedRes, studentRes] = await Promise.all([
+    supabase.from('el_submissions').select('id', { count: 'exact', head: true })
+      .eq('school_id', _currentSchoolId).eq('assignment_id', assignmentId),
+    (() => {
+      let q = supabase.from('students').select('id', { count: 'exact', head: true })
+        .eq('school_id', _currentSchoolId).eq('class', className);
+      if (stream && stream !== 'General' && stream !== '') q = q.eq('stream', stream);
+      return q;
+    })(),
+  ]);
+  if (submittedRes.error) throw submittedRes.error;
+  if (studentRes.error) throw studentRes.error;
+  return { submitted: submittedRes.count || 0, total: studentRes.count || 0 };
+}
+
+export async function getQuizAnalytics(assignmentId) {
+  const { data: assignment, error: assignmentError } = await supabase.from('el_assignments')
+    .select('quiz_config, questions, max_score, title').eq('id', assignmentId)
+    .eq('school_id', _currentSchoolId).single();
+  if (assignmentError) throw assignmentError;
+  const { data: submissions, error: submissionsError } = await supabase.from('el_submissions')
+    .select('quiz_results, grade_numeric, score').eq('school_id', _currentSchoolId).eq('assignment_id', assignmentId);
+  if (submissionsError) throw submissionsError;
+  const subs = submissions || [];
+  const questions = assignment.quiz_config || assignment.questions || [];
+  if (!subs.length) return { title: assignment.title, totalSubmissions: 0, questionStats: [] };
+  const questionStats = questions.map((question, index) => {
+    const correct = subs.filter((sub) => sub.quiz_results?.answers?.[index]?.correct).length;
+    return { id: question.id, text: question.text, successRate: (correct / subs.length) * 100 };
+  });
+  const scores = subs.map((sub) => Number(sub.grade_numeric ?? sub.score ?? 0));
+  return {
+    title: assignment.title,
+    maxScore: assignment.max_score,
+    totalSubmissions: subs.length,
+    avgScore: (scores.reduce((sum, score) => sum + score, 0) / subs.length).toFixed(1),
+    highestScore: Math.max(...scores),
+    lowestScore: Math.min(...scores),
+    questionStats,
+  };
+}
+
+export async function updateSubmission(submissionId, updates) {
+  mutationGuard('updateSubmission');
+  const payload = {};
+  if (updates.grade_numeric !== undefined) { payload.grade_numeric = updates.grade_numeric; payload.score = updates.grade_numeric; }
+  if (updates.feedback !== undefined) { payload.feedback = updates.feedback; payload.teacher_comment = updates.feedback; }
+  if (updates.workflow_status !== undefined) {
+    payload.workflow_status = updates.workflow_status;
+    payload.status = String(updates.workflow_status).toLowerCase() === 'released' ? 'graded' : 'submitted';
+  }
+  if (updates.status !== undefined) payload.status = updates.status;
+  payload.updated_at = new Date().toISOString();
+  if (payload.grade_numeric !== undefined || payload.feedback !== undefined) {
+    payload.graded_at = new Date().toISOString();
+    if (_currentUserId) payload.graded_by = _currentUserId;
+  }
+  const { data, error } = await supabase.from('el_submissions').update(payload)
+    .eq('id', submissionId).eq('school_id', _currentSchoolId).select().single();
+  if (error) throw error;
+  return data;
 }
 
 export async function getAnnouncements(filters = {}) {
@@ -2318,18 +2446,15 @@ export async function initializeStreams() {
 }
 
 export async function deleteAllExams() {
-  console.warn('[academicsStore] deleteAllExams is not yet implemented');
-  return [];
+  throw new Error('Bulk exam deletion is not implemented. No exams were deleted.');
 }
 
 export async function previewClassPromotion() {
-  console.warn('[academicsStore] previewClassPromotion is not yet implemented');
-  return { promoted: [], retained: [] };
+  throw new Error('Class promotion is temporarily disabled. The transactional promotion preview and audit-history workflow has not yet been implemented. No students were changed.');
 }
 
 export async function promoteClasses() {
-  console.warn('[academicsStore] promoteClasses is not yet implemented');
-  return { promoted: 0, retained: 0 };
+  throw new Error('Class promotion is temporarily disabled. No students or class records were changed. Use the official student transfer workflow until promotion history and rollback are implemented.');
 }
 
 export async function getOpenExamsForTeacher() {
@@ -2364,26 +2489,36 @@ export async function getOpenExamsForTeacher() {
 
 export async function getVirtualPaperMarks(schoolId, className, subjectName, examName) {
   const targetSchoolId = schoolId || _currentSchoolId;
-  if (!targetSchoolId) return [];
+  if (!targetSchoolId || !_currentPeriodId) return [];
   try {
-    let query = supabase
-      .from('marks')
-      .select('student_id, mark, is_absent')
-      .eq('school_id', targetSchoolId);
+    let studentIds = null;
+    if (className) {
+      const { data: roster, error: rosterError } = await supabase
+        .from('students').select('id')
+        .eq('school_id', targetSchoolId).eq('class', className);
+      if (rosterError) throw rosterError;
+      studentIds = (roster || []).map((student) => student.id);
+      if (!studentIds.length) return [];
+    }
 
+    let query = supabase.from('marks')
+      .select('student_id, mark, is_absent')
+      .eq('school_id', targetSchoolId)
+      .eq('period_id', _currentPeriodId);
+    if (studentIds) query = query.in('student_id', studentIds);
     if (subjectName) query = query.eq('subject', subjectName);
     if (examName) query = query.eq('exam_type', examName);
 
     const { data, error } = await query;
     if (error) throw error;
-    return (data || []).map(m => ({
-      student_id: m.student_id,
-      raw_score: m.mark === -1 ? null : m.mark,
-      is_absent: m.mark === -1 || !!m.is_absent
+    return (data || []).map((mark) => ({
+      student_id: mark.student_id,
+      raw_score: mark.mark === -1 ? null : mark.mark,
+      is_absent: mark.mark === -1 || !!mark.is_absent,
     }));
-  } catch (err) {
-    console.error('[academicsStore] Failed to get virtual paper marks:', err);
-    return [];
+  } catch (error) {
+    console.error('[academicsStore] Failed to get virtual paper marks:', error);
+    throw error;
   }
 }
 
@@ -2465,15 +2600,13 @@ export async function getStudentCBCProgress(studentId) {
 
 export async function getStudentAssignments(studentId) {
   if (!studentId) return [];
-  const token = localStorage.getItem('Termly_Portal_Token');
-  try {
-    const { data, error } = await supabase.rpc('portal_get_student_assignments', {
-      p_student_id: studentId,
-      p_token: token
-    });
-    if (!error && Array.isArray(data)) return data;
-    return [];
-  } catch (e) {
-    return [];
-  }
+  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('Termly_Portal_Token') : null;
+  if (!token) throw new Error('A valid parent portal session is required to load assignments.');
+  const { data, error } = await supabase.rpc('portal_get_student_assignments', {
+    p_student_id: studentId,
+    p_token: token,
+  });
+  if (error) throw error;
+  if (!Array.isArray(data)) throw new Error('Student assignment service returned an invalid response.');
+  return data;
 }

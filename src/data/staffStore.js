@@ -126,9 +126,9 @@ export async function addTeacher(teacher) {
     
   if (error) throw error;
   
-  const { data: pData } = await supabase.from('school_profiles').select('staff_count').eq('school_id', schoolId)
+  const { data: pData } = await supabase.from('school_profiles').select('staff_count').eq('school_id', _currentSchoolId)
     .maybeSingle();
-  await supabase.from('school_profiles').upsert({ school_id: schoolId,
+  await supabase.from('school_profiles').upsert({ school_id: _currentSchoolId,
       staff_count: (pData?.staff_count || 0) + 1 }, { onConflict: 'school_id' });
 
   try { await db.teachers.put(data); } catch(e) {}

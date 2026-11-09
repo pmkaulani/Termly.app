@@ -25,6 +25,7 @@ export default function Dashboard({ currentUser, onLogout, currentPeriodId }) {
   const [loading, setLoading] = useState(true);
   const [periods, setPeriods] = useState([]);
   const [isAccountActive, setIsAccountActive] = useState(true);
+  const [dataLoadErrors, setDataLoadErrors] = useState([]);
   const [showWizard, setShowWizard] = useState(false);
   const { features } = useFeatures();
   const feat = (slug) => features[slug]?.enabled === true;
@@ -32,11 +33,12 @@ export default function Dashboard({ currentUser, onLogout, currentPeriodId }) {
   useEffect(() => {
     const loadData = async () => {
       try {
-        const wrap = async (p, fb = []) => { try { return await p; } catch(e) { console.error(e); return fb; } };
+        const loadErrors = [];
+        const wrap = async (p, fb = [], label = 'Dashboard data') => { try { return await p; } catch(e) { console.error(label, e); loadErrors.push(label + ': ' + (e?.message || 'load failed')); return fb; } };
         const [students, fees, marks, teachers, profile, attendance, adminUsers, platformSettings, allPeriods, portalActivity] = await Promise.all([
-          wrap(getStudents()), wrap(getFees(), {}), wrap(getMarks(), {}), wrap(getTeachers()), 
-          wrap(getSchoolProfile(), {}), wrap(getAttendance(), {}), wrap(getUsers()), 
-          wrap(getPlatformSettings(), {}), wrap(getPeriods()), wrap(getPortalActivity(5))
+          wrap(getStudents(), [], 'Students'), wrap(getFees(), {}, 'Fees'), wrap(getMarks(), {}, 'Marks'), wrap(getTeachers(), [], 'Teachers'),
+          wrap(getSchoolProfile(), {}, 'School profile'), wrap(getAttendance(), {}, 'Attendance'), wrap(getUsers(), [], 'Staff users'),
+          wrap(getPlatformSettings(), {}, 'Platform settings'), wrap(getPeriods(), [], 'Academic periods'), wrap(getPortalActivity(5), [], 'Portal activity')
         ]);
         
         const prof = profile || {};
@@ -46,9 +48,9 @@ export default function Dashboard({ currentUser, onLogout, currentPeriodId }) {
 
         const todayStr = getTodayStr();
         const [feeSummary, todayAtt, schoolStructure] = await Promise.all([
-          wrap(getFeeSummary(fees, students, prof), { totalExpected:0, totalCollected:0, totalOutstanding:0, fullyPaid:0, partialPaid:0, unpaid:0 }),
-          wrap(getAttendanceSummary(todayStr, attendance), { present:0, late:0, absent:0, total:0, percentage:0 }),
-          wrap(getSchoolStructure(students, marks, prof), {})
+          wrap(getFeeSummary(fees, students, prof), { totalExpected:0, totalCollected:0, totalOutstanding:0, fullyPaid:0, partialPaid:0, unpaid:0 }, 'Fee summary'),
+          wrap(getAttendanceSummary(todayStr, attendance, students, 'Morning'), { present:0, late:0, absent:0, total:students.length, percentage:0 }, 'Attendance summary'),
+          wrap(getSchoolStructure(students, marks, prof), {}, 'School structure')
         ]);
         const allPayments = [];
         students.forEach(s => {
@@ -58,7 +60,9 @@ export default function Dashboard({ currentUser, onLogout, currentPeriodId }) {
         allPayments.sort((a, b) => new Date(b.date) - new Date(a.date));
         const collectionRate = feeSummary.totalExpected > 0
           ? ((feeSummary.totalCollected / feeSummary.totalExpected) * 100).toFixed(1) : 0;
+        setDataLoadErrors(loadErrors);
         const newData = {
+          dataLoadErrors: loadErrors,
           totalStudents: students.length, totalTeachers: teachers.length,
           collectionRate: Number(collectionRate), feeSummary,
           attendance: todayAtt, recentPayments: allPayments.slice(0, 5),
@@ -73,6 +77,7 @@ export default function Dashboard({ currentUser, onLogout, currentPeriodId }) {
         setShowWizard(!prof?.setup_completed);
       } catch (err) {
         console.error(err);
+        setDataLoadErrors([err?.message || 'Dashboard data could not be loaded.']);
         setData({
           totalStudents: 0, totalTeachers: 0, collectionRate: 0,
           feeSummary: { totalExpected:0, totalCollected:0, totalOutstanding:0, fullyPaid:0, partialPaid:0, unpaid:0 },
@@ -194,6 +199,14 @@ export default function Dashboard({ currentUser, onLogout, currentPeriodId }) {
           </div>
         </div>
       </div>
+
+      {dataLoadErrors.length > 0 && (
+        <div role="alert" className="card" style={{ marginBottom: 16, border: '1px solid var(--warning, #d97706)', padding: 14 }}>
+          <strong>Some dashboard information could not be loaded.</strong>
+          <div style={{ fontSize: '0.82rem', marginTop: 6 }}>{dataLoadErrors.join(' • ')}</div>
+          <div style={{ fontSize: '0.75rem', marginTop: 4, color: 'var(--text-muted)' }}>Numbers for failed sources may be incomplete. Check your connection and reload before making operational decisions.</div>
+        </div>
+      )}
 
       {/* KPI Cards */}
       <div className="kpi-grid" style={{ '--kpi-cols': kpis.length }}>

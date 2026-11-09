@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { getPendingSyncCount, getFailedSyncCount } from '../../data/offlineStore';
+import { getPendingSyncCount, getFailedSyncCount, retryFailedSync } from '../../data/offlineStore';
+import { triggerSync } from '../../data/syncStore';
 import { CloudSyncIcon } from '../CommonIcons';
 
 export default function SyncIndicator() {
@@ -76,6 +77,9 @@ export default function SyncIndicator() {
       <span className="sync-status-text desktop-only">
         {getStatusText()}
       </span>
+      {failedCount > 0 && (
+        <button type="button" className="btn btn-ghost btn-sm" onClick={async () => { await retryFailedSync(); await triggerSync(); await updateCount(); }} title="Retry failed synchronization items">Retry</button>
+      )}
 
       <style jsx>{`
         .sync-indicator {

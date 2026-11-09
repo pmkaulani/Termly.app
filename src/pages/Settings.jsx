@@ -145,8 +145,17 @@ export default function Settings() {
       });
     }
 
-    try{await saveSchoolProfile(sanitizedProfile);setSaved(true);setTimeout(()=>setSaved(false),3000);}
-    catch(err){alert({ title: 'Save Error', message: err.message, variant: 'danger' });}finally{setLoading(false);}
+    try {
+      const result = await saveSchoolProfile(sanitizedProfile);
+      if (result?.skipped?.length) {
+        setSaved(false);
+        alert({ title: 'Partially Saved', message: 'Some settings were not stored because the database is missing these columns: ' + result.skipped.join(', ') + '. Apply the required schema migration before relying on those settings.', variant: 'warning' });
+      } else {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 3000);
+      }
+    } catch (err) { alert({ title: 'Save Error', message: err.message, variant: 'danger' }); }
+    finally { setLoading(false); }
   };
   const handleChange=(e)=>{const{name,value}=e.target;setProfile(p=>({...p,[name]:value}));setSaved(false);};
   const handleLogoUpload=(e)=>{
@@ -1204,24 +1213,21 @@ export default function Settings() {
                     <ol style={{fontSize:'0.75rem',color:'var(--text-main)',paddingLeft:16,lineHeight:1.6}}>
                       <li>Login to <a href="https://developer.safaricom.co.ke/" target="_blank" rel="noreferrer" style={{color:'var(--primary)',fontWeight:600}}>Daraja Portal</a></li>
                       <li>Create a "Lipan M-Pesa Paybill" app in My Apps</li>
-                      <li>Copy your **Shortcode**, **Consumer Key**, and **Secret** below</li>
+                      <li>Configure MPESA_SHORTCODE, MPESA_CONSUMER_KEY, MPESA_CONSUMER_SECRET and MPESA_PASSKEY as Supabase Edge Function secrets. Do not paste API secrets into the browser.</li>
                     </ol>
                   </div>
 
                   <div style={{display:'flex',flexDirection:'column',gap:12}}>
                     <div className="form-group">
                       <label style={{fontSize:'0.7rem'}}>Business Shortcode / Paybill</label>
-                      <input className="form-input" placeholder="e.g. 174379" value={profile.mpesa_config?.shortcode||''} 
-                        onChange={e=>setProfile({...profile, mpesa_config: {...profile.mpesa_config, shortcode: e.target.value}})}/>
+                      <input className="form-input" placeholder="Configured in Supabase Edge Function secrets" value="" disabled />
                     </div>
                     <div className="form-group">
                       <label style={{fontSize:'0.7rem'}}>Consumer Key</label>
                       <div style={{ position: 'relative' }}>
                         <input className="form-input" 
                           type={showMpesaKey ? "text" : "password"} 
-                          placeholder="Daraja Consumer Key" 
-                          value={profile.mpesa_config?.consumer_key||''} 
-                          onChange={e=>setProfile({...profile, mpesa_config: {...profile.mpesa_config, consumer_key: e.target.value}})}
+                          value="" readOnly placeholder="Configured in Supabase Edge Function secrets"
                           style={{ paddingRight: '40px' }}
                         />
                         <button type="button" onClick={() => setShowMpesaKey(!showMpesaKey)} style={{ position: 'absolute', right: 10, top: 12, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-light)' }}>
@@ -1234,9 +1240,7 @@ export default function Settings() {
                       <div style={{ position: 'relative' }}>
                         <input className="form-input" 
                           type={showMpesaSec ? "text" : "password"} 
-                          placeholder="Daraja Consumer Secret" 
-                          value={profile.mpesa_config?.consumer_secret||''} 
-                          onChange={e=>setProfile({...profile, mpesa_config: {...profile.mpesa_config, consumer_secret: e.target.value}})}
+                          value="" readOnly placeholder="Configured in Supabase Edge Function secrets"
                           style={{ paddingRight: '40px' }}
                         />
                         <button type="button" onClick={() => setShowMpesaSec(!showMpesaSec)} style={{ position: 'absolute', right: 10, top: 12, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-light)' }}>
@@ -1246,7 +1250,7 @@ export default function Settings() {
                     </div>
                     
                     <div style={{display:'flex',gap:10,marginTop:10}}>
-                      <button className="btn btn-ghost btn-sm" onClick={handleTestMpesa} disabled={testingMpesa || !profile.mpesa_config?.shortcode}>
+                      <button className="btn btn-ghost btn-sm" onClick={handleTestMpesa} disabled={testingMpesa}>
                         {testingMpesa ? 'Testing...' : 'Test Connection'}
                       </button>
                     </div>
@@ -1254,10 +1258,10 @@ export default function Settings() {
                     <div style={{marginTop:12,padding:12,background:'var(--bg)',borderRadius:8,border:'1px dashed var(--border)',display:'flex',flexDirection:'column',gap:8}}>
                       <div style={{display:'flex',alignItems:'center',gap:10}}>
                         <ShieldIcon size={18} color="var(--primary)" />
-                        <p style={{fontSize:'0.68rem',color:'var(--text-light)',margin:0,fontWeight:600}}>AES-256 Encryption Active</p>
+                        <p style={{fontSize:'0.68rem',color:'var(--text-light)',margin:0,fontWeight:600}}>Supabase Edge Function Secrets</p>
                       </div>
                       <p style={{fontSize:'0.65rem',color:'var(--text-light)',margin:0,lineHeight:1.4}}>
-                        Your Consumer Key and Secret are encrypted at the database level. They are only decrypted temporarily when performing a connection test or during automated reconciliation. <strong>Termly staff cannot see your raw credentials.</strong>
+                        Daraja credentials are read by the Edge Function from Supabase secrets and are never returned to the browser or stored in this school profile. The test above checks server-side OAuth authentication; it does not initiate a payment.
                       </p>
                     </div>
                   </div>
@@ -1280,24 +1284,21 @@ export default function Settings() {
                     <ul style={{fontSize:'0.75rem',color:'var(--text-main)',paddingLeft:16,lineHeight:1.6}}>
                       <li>Create account at <a href="https://africastalking.com/" target="_blank" rel="noreferrer" style={{color:'#166534',fontWeight:600}}>Africa's Talking</a></li>
                       <li>Apply for a **Sender ID** (Alphanumeric)</li>
-                      <li>Generate an **API Key** from the dashboard</li>
+                      <li>Configure AFRICASTALKING_API_KEY, AFRICASTALKING_USERNAME and AFRICASTALKING_SENDER_ID as Supabase Edge Function secrets.</li>
                     </ul>
                   </div>
 
                   <div style={{display:'flex',flexDirection:'column',gap:12}}>
                     <div className="form-group">
                       <label style={{fontSize:'0.7rem'}}>Sender ID (Optional)</label>
-                      <input className="form-input" placeholder="e.g. Termly" value={profile.sms_config?.sender_id||''} 
-                        onChange={e=>setProfile({...profile, sms_config: {...profile.sms_config, sender_id: e.target.value}})}/>
+                      <input className="form-input" placeholder="Configured in Supabase Edge Function secrets" value="" disabled />
                     </div>
                     <div className="form-group">
                       <label style={{fontSize:'0.7rem'}}>API Key</label>
                       <div style={{ position: 'relative' }}>
                         <input className="form-input" 
                           type={showSmsKey ? "text" : "password"} 
-                          placeholder="Africa's Talking API Key" 
-                          value={profile.sms_config?.api_key||''} 
-                          onChange={e=>setProfile({...profile, sms_config: {...profile.sms_config, api_key: e.target.value}})}
+                          value="" readOnly placeholder="Configured in Supabase Edge Function secrets"
                           style={{ paddingRight: '40px' }}
                         />
                         <button type="button" onClick={() => setShowSmsKey(!showSmsKey)} style={{ position: 'absolute', right: 10, top: 12, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-light)' }}>
@@ -1307,7 +1308,7 @@ export default function Settings() {
                     </div>
                     
                     <div style={{display:'flex',gap:10,marginTop:10}}>
-                      <button className="btn btn-ghost btn-sm" onClick={handleTestSms} disabled={testingSms || !profile.sms_config?.api_key}>
+                      <button className="btn btn-ghost btn-sm" onClick={handleTestSms} disabled={testingSms}>
                         {testingSms ? 'Testing...' : 'Test Connection'}
                       </button>
                     </div>
@@ -1315,10 +1316,10 @@ export default function Settings() {
                     <div style={{marginTop:8,padding:12,background:'var(--bg)',borderRadius:8,border:'1px dashed var(--border)',display:'flex',flexDirection:'column',gap:8}}>
                       <div style={{display:'flex',alignItems:'center',gap:10}}>
                         <ShieldIcon size={18} color="var(--primary)" />
-                        <p style={{fontSize:'0.68rem',color:'var(--text-light)',margin:0,fontWeight:600}}>Secure API Storage</p>
+                        <p style={{fontSize:'0.68rem',color:'var(--text-light)',margin:0,fontWeight:600}}>Server-Side API Configuration</p>
                       </div>
                       <p style={{fontSize:'0.65rem',color:'var(--text-light)',margin:0,lineHeight:1.4}}>
-                        Your Africa's Talking API key is stored using hardware-level encryption primitives. We use this key only to dispatch automated SMS alerts (Attendance, Fees, Exams) as configured in your communication settings.
+                        Africa's Talking credentials are read by the Edge Function from Supabase secrets and are not returned to this browser or stored in this school profile. The test checks provider account authentication and does not send an SMS.
                       </p>
                     </div>
                   </div>

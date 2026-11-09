@@ -20,6 +20,7 @@ import { initiateStkPush } from '../utils/mpesa';
 
 function PaymentModal({ student, fee, onPay, onClose }) {
   const { alert, confirm, toast } = useDialog();
+  const { enabled: mpesaEnabled } = useFeature('mpesa');
   const [amount, setAmount] = useState('');
   const [method, setMethod] = useState('M-Pesa');
   const [reference, setReference] = useState('');
@@ -57,11 +58,12 @@ function PaymentModal({ student, fee, onPay, onClose }) {
         phoneNumber: phone,
         amount: Number(amount),
         accountRef: student.admNo,
-        description: `Fees: ${student.name}`
+        description: `Fees: ${student.name}`,
+        studentId: student.id
       });
 
       if (res.success) {
-        toast({ title: 'STK Push Sent', message: 'Request sent to parent phone. Wait for confirmation.', variant: 'success' });
+        toast({ title: 'STK Push Accepted', message: 'Safaricom accepted the request. Ask the payer to check their phone; the fee ledger updates only after the payment callback is verified.', variant: 'success' });
         // We don't close yet, wait for manual confirmation or callback
       }
     } catch (err) {
@@ -133,7 +135,7 @@ function PaymentModal({ student, fee, onPay, onClose }) {
                   <label className="form-label" style={{ fontSize: '0.75rem', fontWeight: 700 }}>STK Push Number</label>
                   <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
                     <input className="form-input" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="2547..." style={{ flex: 1 }} />
-                    {isFeatureEnabled('mpesa') ? (
+                    {mpesaEnabled ? (
                       <button 
                         type="button" 
                         className="btn btn-success" 

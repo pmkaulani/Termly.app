@@ -408,8 +408,8 @@ export async function getSchoolProfileBySchoolId(schoolId) {
     staffLimit: sch.staff_limit || prof.staff_limit || customSubjects?.__limits?.staff || 5,
     staff_limit: sch.staff_limit || prof.staff_limit || customSubjects?.__limits?.staff || 5,
     portal_access: prof.portal_access,
-    mpesa_config: prof.mpesa_config,
-    sms_config: prof.sms_config,
+    mpesa_config: { managed_by: 'supabase_edge_function_secrets' },
+    sms_config: { managed_by: 'supabase_edge_function_secrets' },
     setup_completed: prof.setup_completed
   };
 }
@@ -498,7 +498,7 @@ export async function saveSchoolProfile(profile) {
     throw new Error("School Identification Lost. Please refresh your browser or log in again.");
   }
 
-  const { mpesa = {}, sms = {}, ...rest } = profile;
+  const { ...rest } = profile;
   const row = { ...rest, school_id: _currentSchoolId };
 
   // Map camelCase UI properties to snake_case DB columns
@@ -533,16 +533,8 @@ export async function saveSchoolProfile(profile) {
     return val;
   };
 
-  row.mpesa_config = {
-    shortcode: mpesa.shortcode || '',
-    consumer_key: await encryptIfNew(mpesa.consumer_key, mpesa._encrypted?.consumer_key),
-    consumer_secret: await encryptIfNew(mpesa.consumer_secret, mpesa._encrypted?.consumer_secret),
-  };
-
-  row.sms_config = {
-    sender_id: sms.sender_id || '',
-    api_key: await encryptIfNew(sms.api_key, sms._encrypted?.api_key),
-  };
+  row.mpesa_config = { managed_by: 'supabase_edge_function_secrets' };
+  row.sms_config = { managed_by: 'supabase_edge_function_secrets' };
 
   if (row.grading_systems) {
     Object.keys(row.grading_systems).forEach(lv => {
@@ -818,22 +810,19 @@ export async function exportData(selectedModules = null) {
 
   const isAll = !selectedModules || Object.values(selectedModules).every(v => v);
 
-  const fetchIf = (key, queryPromise) => {
-    if (isAll || selectedModules?.[key]) {
-      return queryPromise.catch(() => ({ data: [] }));
-    }
-    return Promise.resolve({ data: null });
+  const fetchIf = async (key, queryPromise) => {
+    if (!(isAll || selectedModules?.[key])) return { data: null };
+    const { data, error } = await queryPromise;
+    if (error) throw new Error('Backup export failed for ' + key + ': ' + error.message);
+    return { data: data || [] };
   };
 
   // Fetch selected datasets for this school
   const [
-    studentsRes,
-    teachersRes,
-    feesRes,
-    paymentsRes,
-    marksRes,
-    timetableRes,
-    noticesRes
+    studentsRes, teachersRes, feesRes, paymentsRes, marksRes, timetableRes, noticesRes,
+    periodsRes, classesRes, streamsRes, subjectsRes, teacherSubjectRes, examsRes,
+    examPapersRes, legacyMarksRes, cbcRes, competenciesRes, attendanceRes,
+    teacherAssignmentsRes, subjectAssignmentsRes, lmsAssignmentsRes, lmsSubmissionsRes
   ] = await Promise.all([
     fetchIf('students', supabase.from('students').select('*').eq('school_id', schoolId)),
     fetchIf('teachers', supabase.from('teachers').select('*').eq('school_id', schoolId)),
@@ -841,12 +830,32 @@ export async function exportData(selectedModules = null) {
     fetchIf('payments', supabase.from('fee_payments').select('*').eq('school_id', schoolId)),
     fetchIf('marks', supabase.from('exam_marks').select('*').eq('school_id', schoolId)),
     fetchIf('timetable', supabase.from('timetable_slots').select('*').eq('school_id', schoolId)),
-    fetchIf('announcements', supabase.from('announcements').select('*').eq('school_id', schoolId))
+    fetchIf('announcements', supabase.from('announcements').select('*').eq('school_id', schoolId)),
+    fetchIf('students', supabase.from('academic_periods').select('*').eq('school_id', schoolId)),
+    fetchIf('students', supabase.from('classes').select('*').eq('school_id', schoolId)),
+    fetchIf('students', supabase.from('class_streams').select('*').eq('school_id', schoolId)),
+    fetchIf('timetable', supabase.from('tt_subjects').select('*').eq('school_id', schoolId)),
+    fetchIf('timetable', supabase.from('tt_teacher_subjects').select('*').eq('school_id', schoolId)),
+    fetchIf('marks', supabase.from('exams').select('*').eq('school_id', schoolId)),
+    fetchIf('marks', supabase.from('exam_papers').select('*').eq('school_id', schoolId)),
+    fetchIf('marks', supabase.from('marks').select('*').eq('school_id', schoolId)),
+    fetchIf('marks', supabase.from('cbc_assessments').select('*').eq('school_id', schoolId)),
+    fetchIf('marks', supabase.from('core_competencies').select('*').eq('school_id', schoolId)),
+    fetchIf('students', supabase.from('attendance').select('*').eq('school_id', schoolId)),
+    fetchIf('timetable', supabase.from('teacher_assignments').select('*').eq('school_id', schoolId)),
+    fetchIf('timetable', supabase.from('subject_assignments').select('*').eq('school_id', schoolId)),
+    fetchIf('students', supabase.from('el_assignments').select('*').eq('school_id', schoolId)),
+    fetchIf('students', supabase.from('el_submissions').select('*').eq('school_id', schoolId))
   ]);
 
   const fullBackup = {
-    exportVersion: '2.0',
+    exportVersion: '3.0',
     exportDate: new Date().toISOString(),
+    backupType: 'selected-module-data-export',
+    completeBackup: false,
+    restoreSupported: false,
+    coverage: 'Operational datasets selected in the export dialog. Identity-provider users, private storage objects, secrets, and some auxiliary data are not included.',
+    warning: 'This export is not a complete or restorable school backup. Restore remains disabled until a transactional restore workflow is implemented and tested.',
     schoolProfile: profile,
     ...(studentsRes?.data !== null && { students: studentsRes.data || [] }),
     ...(teachersRes?.data !== null && { teachers: teachersRes.data || [] }),
@@ -854,7 +863,22 @@ export async function exportData(selectedModules = null) {
     ...(paymentsRes?.data !== null && { feePayments: paymentsRes.data || [] }),
     ...(marksRes?.data !== null && { examMarks: marksRes.data || [] }),
     ...(timetableRes?.data !== null && { timetableSlots: timetableRes.data || [] }),
-    ...(noticesRes?.data !== null && { announcements: noticesRes.data || [] })
+    ...(noticesRes?.data !== null && { announcements: noticesRes.data || [] }),
+    ...(periodsRes?.data !== null && { academicPeriods: periodsRes.data || [] }),
+    ...(classesRes?.data !== null && { classes: classesRes.data || [] }),
+    ...(streamsRes?.data !== null && { classStreams: streamsRes.data || [] }),
+    ...(subjectsRes?.data !== null && { subjects: subjectsRes.data || [] }),
+    ...(teacherSubjectRes?.data !== null && { teacherSubjectAssignments: teacherSubjectRes.data || [] }),
+    ...(examsRes?.data !== null && { exams: examsRes.data || [] }),
+    ...(examPapersRes?.data !== null && { examPapers: examPapersRes.data || [] }),
+    ...(legacyMarksRes?.data !== null && { legacyMarks: legacyMarksRes.data || [] }),
+    ...(cbcRes?.data !== null && { cbcAssessments: cbcRes.data || [] }),
+    ...(competenciesRes?.data !== null && { coreCompetencies: competenciesRes.data || [] }),
+    ...(attendanceRes?.data !== null && { attendance: attendanceRes.data || [] }),
+    ...(teacherAssignmentsRes?.data !== null && { teacherAssignments: teacherAssignmentsRes.data || [] }),
+    ...(subjectAssignmentsRes?.data !== null && { subjectAssignments: subjectAssignmentsRes.data || [] }),
+    ...(lmsAssignmentsRes?.data !== null && { lmsAssignments: lmsAssignmentsRes.data || [] }),
+    ...(lmsSubmissionsRes?.data !== null && { lmsSubmissions: lmsSubmissionsRes.data || [] })
   };
 
   const jsonStr = JSON.stringify(fullBackup, null, 2);
@@ -872,7 +896,7 @@ export async function exportData(selectedModules = null) {
 }
 
 export async function importData(jsonDataStr) {
-  throw new Error('Import is not yet supported on the cloud version. Please contact support.');
+  throw new Error('Cloud restore is disabled. Termly currently exports selected data only and does not yet provide a validated, transactional restore workflow. Do not treat the export as a complete backup.');
 }
 
 

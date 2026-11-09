@@ -20,6 +20,15 @@ function getCorsHeaders(req: Request) {
   };
 }
 
+function getDarajaTimestamp(now: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Africa/Nairobi', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).formatToParts(now);
+  const part = (name: string) => parts.find((item) => item.type === name)?.value || '00';
+  return [part('year'), part('month'), part('day'), part('hour'), part('minute'), part('second')].join('');
+}
+
 async function getOAuthToken(env: string, key: string, secret: string) {
   const url = env === 'sandbox'
     ? 'https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials'
@@ -84,6 +93,10 @@ serve(async (req) => {
         if (userData) {
           authenticatedSchoolId = userData.school_id;
           callerRole = userData.role || 'Admin';
+        } else {
+          const { data: ownerSchool } = await supabaseAdmin.from('schools').select('id')
+            .eq('owner_id', user.id).maybeSingle();
+          if (ownerSchool?.id) { authenticatedSchoolId = ownerSchool.id; callerRole = 'owner'; }
         }
       }
     }
@@ -104,10 +117,46 @@ serve(async (req) => {
     const CALLBACK_URL = Deno.env.get('MPESA_CALLBACK_URL') ?? '';
     const ENVIRONMENT = Deno.env.get('MPESA_ENVIRONMENT') || 'sandbox';
 
+    if (action === 'test_connection') {
+      const role = String(callerRole || '').toLowerCase();
+      if (!['owner', 'admin'].includes(role)) {
+        return new Response(JSON.stringify({ success: false, message: 'Only a school owner or administrator can test Daraja credentials.' }), {
+          status: 403, headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }
+        });
+      }
+      if (!CONSUMER_KEY || CONSUMER_KEY === 'MOCK_KEY' || !CONSUMER_SECRET || !SHORTCODE || !PASSKEY) {
+        return new Response(JSON.stringify({ success: false, message: 'Daraja credentials are incomplete. Configure secrets in Supabase.' }), {
+          status: 200, headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }
+        });
+      }
+      try {
+        await getOAuthToken(ENVIRONMENT, CONSUMER_KEY, CONSUMER_SECRET);
+        return new Response(JSON.stringify({ success: true, message: 'Safaricom Daraja OAuth authentication succeeded. No payment prompt was sent.' }), {
+          status: 200, headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }
+        });
+      } catch (testError) {
+        return new Response(JSON.stringify({ success: false, message: testError.message || 'Daraja OAuth authentication failed.' }), {
+          status: 200, headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
     // 2. Action: Push (STK Push initiation)
     if (action === 'push') {
       const { phoneNumber, amount, accountRef, description, studentId } = payload;
-      const targetStudentId = studentId || authenticatedStudentId;
+      const role = String(callerRole || '').toLowerCase();
+      const parentSession = role === 'parent' || role === 'student';
+      if (parentSession && studentId && studentId !== authenticatedStudentId) {
+        return new Response(JSON.stringify({ error: 'A parent portal session can only initiate payment for its linked student.' }), {
+          status: 403, headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }
+        });
+      }
+      if (!parentSession && !['owner', 'admin', 'finance'].includes(role)) {
+        return new Response(JSON.stringify({ error: 'Your account is not authorized to initiate school fee payments.' }), {
+          status: 403, headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }
+        });
+      }
+      const targetStudentId = parentSession ? authenticatedStudentId : (studentId || authenticatedStudentId);
 
       if (!targetStudentId) {
         return new Response(JSON.stringify({ error: 'Student ID is required.' }), {
@@ -151,45 +200,46 @@ serve(async (req) => {
         });
       }
 
-      // Check against current fee ledger
-      const { data: feeRecord } = await supabaseAdmin
-        .from('fees')
-        .select('id, balance, total_fee')
-        .eq('student_id', targetStudentId)
-        .maybeSingle();
+      // Check against the school's active academic-period ledger.
+      const { data: activePeriod, error: periodError } = await supabaseAdmin
+        .from('academic_periods').select('id').eq('school_id', authenticatedSchoolId)
+        .eq('is_active', true).order('year', { ascending: false }).limit(1).maybeSingle();
+      if (periodError || !activePeriod) {
+        return new Response(JSON.stringify({ error: 'No active academic period is configured for this school.' }), {
+          status: 409, headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }
+        });
+      }
+      const { data: feeRecord, error: feeError } = await supabaseAdmin
+        .from('fees').select('id, balance, total_fee, period_id')
+        .eq('school_id', authenticatedSchoolId).eq('student_id', targetStudentId)
+        .eq('period_id', activePeriod.id).maybeSingle();
+      if (feeError || !feeRecord) {
+        return new Response(JSON.stringify({ error: 'No fee ledger exists for this student in the active academic period.' }), {
+          status: 409, headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }
+        });
+      }
+      if (numAmount > Number(feeRecord.balance || 0)) {
+        return new Response(JSON.stringify({ error: 'Payment amount exceeds the outstanding fee balance.' }), {
+          status: 400, headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }
+        });
+      }
 
-      if (feeRecord && feeRecord.balance !== null && Number(feeRecord.balance) <= 0) {
+      if (feeRecord.balance !== null && Number(feeRecord.balance) <= 0) {
         return new Response(JSON.stringify({ error: 'Student fee balance is already settled.' }), {
           status: 400,
           headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }
         });
       }
 
-      // Mock mode for local/dev testing
       if (!CONSUMER_KEY || CONSUMER_KEY === 'MOCK_KEY') {
-        const mockMerchant = 'MOCK-' + Date.now();
-        const mockCheckout = 'WS-' + Math.random().toString(36).substring(2, 9);
-        await supabaseAdmin.from('mpesa_callbacks').insert({
-          school_id: authenticatedSchoolId,
-          merchant_request_id: mockMerchant,
-          checkout_request_id: mockCheckout,
-          result_code: -1,
-          bill_ref_number: student.adm_no || student.id,
-          phone_number: cleanPhone,
-          amount: numAmount,
-          status: 'awaiting_callback',
-          created_at: new Date().toISOString()
+        return new Response(JSON.stringify({ error: 'Daraja is not configured. Mock transactions cannot send a real STK prompt and are disabled by this endpoint.' }), {
+          status: 503, headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }
         });
-
-        return new Response(
-          JSON.stringify({ success: true, MerchantRequestID: mockMerchant, CheckoutRequestID: mockCheckout }),
-          { headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }, status: 200 }
-        );
       }
 
       // Live Daraja STK Push
       const token = await getOAuthToken(ENVIRONMENT, CONSUMER_KEY, CONSUMER_SECRET);
-      const timestamp = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
+      const timestamp = getDarajaTimestamp();
       const password = btoa(`${SHORTCODE}${PASSKEY}${timestamp}`);
 
       const url = ENVIRONMENT === 'sandbox'
@@ -222,7 +272,7 @@ serve(async (req) => {
         throw new Error(result.ResponseDescription || 'M-Pesa STK Push rejected.');
       }
 
-      await supabaseAdmin.from('mpesa_callbacks').insert({
+      const { error: trackingError } = await supabaseAdmin.from('mpesa_callbacks').insert({
         school_id: authenticatedSchoolId,
         merchant_request_id: result.MerchantRequestID,
         checkout_request_id: result.CheckoutRequestID,
@@ -230,9 +280,16 @@ serve(async (req) => {
         bill_ref_number: student.adm_no || student.id,
         phone_number: cleanPhone,
         amount: numAmount,
+        period_id: feeRecord.period_id,
         status: 'awaiting_callback',
         created_at: new Date().toISOString()
       });
+      if (trackingError) {
+        console.error('Safaricom accepted the STK request but Termly could not save its tracking row:', trackingError.message);
+        return new Response(JSON.stringify({ error: 'Safaricom may have accepted this STK request, but Termly could not save its tracking record. Check transaction status before attempting another push.' }), {
+          status: 503, headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }
+        });
+      }
 
       return new Response(
         JSON.stringify({
@@ -246,6 +303,12 @@ serve(async (req) => {
     } 
     // 3. Action: Status Query
     else if (action === 'status') {
+      const statusRole = String(callerRole || '').toLowerCase();
+      if (!['owner', 'admin', 'finance', 'parent', 'student'].includes(statusRole)) {
+        return new Response(JSON.stringify({ error: 'Your account is not authorized to view M-Pesa transaction status.' }), {
+          status: 403, headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }
+        });
+      }
       const { checkoutRequestId } = payload;
       
       const { data: cbRecord } = await supabaseAdmin
@@ -261,6 +324,14 @@ serve(async (req) => {
           headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }
         });
       }
+      if (['parent', 'student'].includes(String(callerRole || '').toLowerCase())) {
+        const { data: linkedStudent } = await supabaseAdmin.from('students').select('id, adm_no')
+          .eq('id', authenticatedStudentId).eq('school_id', authenticatedSchoolId).maybeSingle();
+        const ownReference = linkedStudent && (cbRecord.bill_ref_number === linkedStudent.id || cbRecord.bill_ref_number === linkedStudent.adm_no);
+        if (!ownReference) return new Response(JSON.stringify({ error: 'A parent portal session can only view the linked student's payment status.' }), {
+          status: 403, headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' }
+        });
+      }
 
       if (!CONSUMER_KEY || CONSUMER_KEY === 'MOCK_KEY') {
         return new Response(
@@ -270,7 +341,7 @@ serve(async (req) => {
       }
 
       const token = await getOAuthToken(ENVIRONMENT, CONSUMER_KEY, CONSUMER_SECRET);
-      const timestamp = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
+      const timestamp = getDarajaTimestamp();
       const password = btoa(`${SHORTCODE}${PASSKEY}${timestamp}`);
 
       const url = ENVIRONMENT === 'sandbox'

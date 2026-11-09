@@ -105,8 +105,8 @@ export async function sendBroadcast({ channel = 'sms', templateKey, recipients, 
   const template = BROADCAST_TEMPLATES[templateKey] || BROADCAST_TEMPLATES.general_notice;
   const enrichedData = { ...data, schoolName: schoolName || data.schoolName || 'School' };
 
-  const stats = { total: recipients.length, sms_sent: 0, whatsapp_sent: 0, failed: 0, channel };
   const channels = channel === 'both' ? ['sms', 'whatsapp'] : [channel];
+  const stats = { total: recipients.length * channels.length, sms_sent: 0, whatsapp_sent: 0, failed: 0, channel };
 
   for (const ch of channels) {
     const strategy = CHANNELS[ch];
@@ -124,8 +124,10 @@ export async function sendBroadcast({ channel = 'sms', templateKey, recipients, 
           const msg = ch === 'whatsapp'
             ? template.whatsappTemplate(personalData)
             : template.smsTemplate(personalData);
-          await strategy.send([recipient.phone], msg);
-          stats[`${ch}_sent`]++;
+          const result = await strategy.send([recipient.phone], msg);
+          const accepted = Number(result?.accepted_count ?? result?.count ?? 0);
+          stats[`${ch}_sent`] += accepted;
+          stats.failed += Math.max(0, 1 - accepted);
         } catch (err) {
           console.error(`[Broadcast] Failed to send ${ch} to ${recipient.phone}:`, err);
           stats.failed++;
@@ -137,8 +139,10 @@ export async function sendBroadcast({ channel = 'sms', templateKey, recipients, 
         const msg = ch === 'whatsapp'
           ? template.whatsappTemplate(enrichedData)
           : template.smsTemplate(enrichedData);
-        await strategy.send(phones, msg);
-        stats[`${ch}_sent`] += phones.length;
+        const result = await strategy.send(phones, msg);
+        const accepted = Number(result?.accepted_count ?? result?.count ?? 0);
+        stats[`${ch}_sent`] += accepted;
+        stats.failed += Math.max(0, recipients.length - phones.length) + Math.max(0, phones.length - accepted);
       } catch (err) {
         console.error(`[Broadcast] Bulk ${ch} failed:`, err);
         stats.failed += phones.length;
@@ -177,7 +181,7 @@ export async function sendBroadcast({ channel = 'sms', templateKey, recipients, 
     console.warn('[Broadcast] Failed to log announcement:', e.message);
   }
 
-  return { success: stats.failed < stats.total, stats };
+  return { success: stats.failed === 0 && stats.sms_sent + stats.whatsapp_sent > 0, stats, state: 'provider_accepted_not_delivery_confirmed' };
 }
 
 // ===========================

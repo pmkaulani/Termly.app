@@ -150,39 +150,19 @@ export async function recordPayment(studentId, amount, method, reference) {
   const upToDatePaid = Number(reconciled?.paid || currentFee.paid);
 
   // Missing RPC fallback: Perform the operation client-side
-  const paymentDate = new Date().toISOString(); // Full timestamp for minute-level precision
   const amountNum = Number(amount);
-
-  // 2. Insert the payment record with the required fee_id
-  const { data: paymentRecord, error: paymentErr } = await supabase
-    .from('fee_payments')
-    .insert({
-      school_id: _currentSchoolId,
-      student_id: studentId,
-      period_id: _currentPeriodId,
-      fee_id: targetFeeId, // Added to fix not-null constraint
-      amount: amountNum,
-      method: method || 'Cash',
-      reference: sanitizedRef,
-      date: paymentDate
-    })
-    .select()
-    .single();
-
-  if (paymentErr) throw paymentErr;
-
-  // 3. Update the fee balance
-  const { error: updateErr } = await supabase
-    .from('fees')
-    .update({ 
-      paid: upToDatePaid + amountNum, 
-      balance: upToDateTotalFee - (upToDatePaid + amountNum) 
-    })
-    .eq('school_id', _currentSchoolId)
-    .eq('student_id', studentId)
-    .eq('period_id', _currentPeriodId);
-
-  if (updateErr) throw updateErr;
+  const { data: result, error: paymentError } = await supabase.rpc('record_fee_payment_atomic', {
+    p_school_id: _currentSchoolId,
+    p_period_id: _currentPeriodId,
+    p_student_id: studentId,
+    p_amount: amountNum,
+    p_method: method || 'Cash',
+    p_reference: sanitizedRef || null,
+  });
+  if (paymentError) throw paymentError;
+  if (!result?.success || !result?.payment?.id) throw new Error('Payment transaction returned an invalid result.');
+  const paymentRecord = result.payment;
+  const paymentDate = paymentRecord.date || new Date().toISOString();
 
   await logAuditEvent('payment_recorded', 'fee_payments', paymentRecord.id, { 
     student_id: studentId, 
@@ -197,20 +177,25 @@ export async function recordPayment(studentId, amount, method, reference) {
 
   // 4. Queue Payment Confirmation SMS
   const student = (await getStudents()).find(s => s.id === studentId);
-  if (student && student.parent_phone) {
-    await queueSMS(
-      student.parent_phone, 
-      `Termly: We have received KSh ${amount.toLocaleString()} for ${student.name}. Balance: KSh ${(feeRecord?.balance - amount).toLocaleString()}. Ref: ${reference || 'N/A'}`,
-      'fee_payment'
-    );
+  if (student && student.parent_phone && !result.duplicate) {
+    try {
+      await queueSMS(
+        student.parent_phone,
+        `Termly: We have received KSh ${amount.toLocaleString()} for ${student.name}. Balance: KSh ${Number(result.balance || 0).toLocaleString()}. Ref: ${reference || 'N/A'}`,
+        'fee_payment'
+      );
+    } catch (smsError) {
+      // The fee transaction is already committed; do not report it as failed because of an optional SMS side-effect.
+      console.warn('Payment saved, but confirmation SMS could not be dispatched:', smsError?.message || smsError);
+    }
   }
   
   return { 
-    id: `RCT-${Math.random().toString(36).substr(2, 9).toUpperCase()}`, 
-    amount: Number(amount), 
-    method, 
-    reference, 
-    date: paymentDate 
+    id: paymentRecord.id,
+    amount: Number(amount),
+    method,
+    reference: sanitizedRef,
+    date: paymentDate
   };
 }
 
@@ -336,25 +321,12 @@ export async function getMpesaLogs() {
   return data || [];
 }
 
-export async function testMpesaConnection(config) {
-  const key = config.consumer_key?.includes('...********') 
-    ? await decrypt(config._encrypted?.consumer_key, _currentSchoolId) 
-    : config.consumer_key;
-  const secret = config.consumer_secret?.includes('...********')
-    ? await decrypt(config._encrypted?.consumer_secret, _currentSchoolId)
-    : config.consumer_secret;
-
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      if (!config.shortcode || !key || !secret) {
-        resolve({ success: false, message: 'Missing required configuration fields.' });
-      } else if (config.shortcode.length < 5) {
-        resolve({ success: false, message: 'Invalid Shortcode format.' });
-      } else {
-        resolve({ success: true, message: 'Connection to Safaricom Daraja API successful!' });
-      }
-    }, 1500);
+export async function testMpesaConnection() {
+  const { data, error } = await supabase.functions.invoke('mpesa-stk-push', {
+    body: { action: 'test_connection', payload: {} },
   });
+  if (error) return { success: false, message: error.message || 'Daraja connection test failed.' };
+  return data || { success: false, message: 'Daraja returned no test result.' };
 }
 
 export async function getOrphanedMpesaCallbacks() {

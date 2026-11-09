@@ -112,8 +112,7 @@ export async function addUser(user) {
     new_email: user.email,
     new_name: user.name,
     new_role: user.role,
-    new_password: user.password || generateTempPassword(),
-    target_school_id: getCurrentSchoolId()
+    new_password: user.password || generateTempPassword()
   });
 
   if (error) {
@@ -125,28 +124,10 @@ export async function addUser(user) {
 
 export async function deleteUser(id) {
   mutationGuard('deleteUser');
-  // Prevent deleting oneself
-  const { data: { session } } = await supabase.auth.getSession();
-  const all = await getUsers();
-  const targetUser = all.find(u => u.id === id);
-
-  if (targetUser && session?.user?.id === targetUser.auth_user_id) {
-    throw new Error("You cannot delete your own account.");
-  }
-
-  // Also prevent deleting the owner of the school
-  const { data: school } = await supabase
-    .from('schools')
-    .select('owner_id')
-    .eq('id', _currentSchoolId)
-    .single();
-
-  if (school && targetUser && school.owner_id === targetUser.auth_user_id) {
-    throw new Error("Cannot delete the primary school owner.");
-  }
-
-  const { error } = await supabase.from('users').delete().eq('id', id);
-  if (error) throw error;
+  const { data, error } = await supabase.functions.invoke('delete-school-user', { body: { userId: id } });
+  if (error) throw new Error(error.message || 'Could not delete the staff authentication account.');
+  if (data?.error || !data?.success) throw new Error(data?.error || 'Staff account deletion was not confirmed.');
+  return data;
 }
 
 export async function getUserByAuthId(authUserId) {

@@ -31,13 +31,29 @@ db.version(8).stores({
   grading_drafts: '++id, exam_paper_id, student_id, teacher_id, [exam_paper_id+student_id], synced'
 });
 
+// Retry metadata for failed outbox records; old queued records are preserved.
+db.version(9).stores({
+  students: 'id, school_id, name, adm_no, parent_phone, class, status, residence_type',
+  teachers: 'id, school_id, name, pin, phone, on_leave',
+  marks: '[period_id+student_id+subject], period_id, student_id, school_id',
+  attendance: 'id, date, school_id, class_id',
+  communications: '++id, type, target, timestamp, user',
+  assignments: '++id, class, stream, subject, title, dueDate, timestamp, teacher',
+  submissions: '++id, assignment_id, student_id, student_name, workflow_status, timestamp, [assignment_id+student_id]',
+  syncQueue: '++id, type, payload, status, created_at, attempts, last_error',
+  mpesa_transactions: '++id, checkout_id, student_id, amount, status, timestamp',
+  sms_queue: '++id, phoneNumber, message, status, retry_count, created_at',
+  grading_drafts: '++id, exam_paper_id, student_id, teacher_id, [exam_paper_id+student_id], synced'
+});
+
 export const syncTypes = {
   ADD_STUDENT: 'ADD_STUDENT',
   UPDATE_STUDENT: 'UPDATE_STUDENT',
   ADD_MARK: 'ADD_MARK',
   UPDATE_MARK: 'UPDATE_MARK',
   UPLOAD_FEE: 'UPLOAD_FEE',
-  SYNC_GRADES: 'SYNC_GRADES'
+  SYNC_GRADES: 'SYNC_GRADES',
+  ADD_ATTENDANCE: 'ADD_ATTENDANCE'
 };
 
 /**
@@ -77,7 +93,26 @@ export async function getFailedSyncCount() {
  * Mark item as synced or failed
  */
 export async function updateSyncStatus(id, status, error = null) {
-  return await db.syncQueue.update(id, { status, error, synced_at: new Date().toISOString() });
+  const existing = await db.syncQueue.get(id);
+  return db.syncQueue.update(id, {
+    status,
+    last_error: error ? String(error) : null,
+    error: error ? String(error) : null,
+    attempts: status === 'failed' ? (existing?.attempts || 0) + 1 : (existing?.attempts || 0),
+    synced_at: status === 'synced' ? new Date().toISOString() : null,
+  });
+}
+
+export async function getFailedSyncItems() {
+  return db.syncQueue.where('status').equals('failed').toArray();
+}
+
+export async function retryFailedSync() {
+  const failed = await getFailedSyncItems();
+  for (const item of failed) {
+    await db.syncQueue.update(item.id, { status: 'pending', last_error: null, error: null });
+  }
+  return failed.length;
 }
 
 /**
