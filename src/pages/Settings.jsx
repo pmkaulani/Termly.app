@@ -16,6 +16,7 @@ import Cropper from 'react-easy-crop';
 import getCroppedImg from '../utils/cropImage';
 import ImageUploadField from '../components/Common/ImageUploadField';
 import PerpetualLicensePanel from '../components/settings/PerpetualLicensePanel';
+import SchoolHostedMaintenancePanel from '../components/settings/SchoolHostedMaintenancePanel';
 import { uploadSchoolLogo } from '../lib/storageHelpers';
 import {
   ClockIcon, CheckIcon, SaveIcon, SchoolIcon, ImageIcon, FolderIcon,
@@ -548,6 +549,22 @@ export default function Settings() {
           </button>
         </div>
       </div>
+
+      {isAdmin && (
+        <div style={{ marginBottom: 24 }}>
+          <PerpetualLicensePanel
+            profile={profile}
+            isAdmin={isAdmin}
+            onActivated={async () => {
+              const refreshed = await refreshSchoolProfile();
+              if (refreshed) setProfile((current) => ({ ...current, ...refreshed }));
+              window.dispatchEvent(new Event('schoolProfileChanged'));
+            }}
+          />
+        </div>
+      )}
+
+      {isAdmin && <SchoolHostedMaintenancePanel profile={profile} />}
 
       <div style={{display:'flex',flexDirection:'column',gap:24}}>
 

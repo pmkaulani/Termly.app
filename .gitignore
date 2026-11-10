@@ -62,3 +62,10 @@ termly-license-keys/
 *-termly-license.json
 termly-phase4-perpetual-licensing/
 termly-phase4-perpetual-licensing.zip
+deployment/school-hosted/runtime/termly-update-status.json
+deployment/school-hosted/update/update.env
+termly-release-keys/
+release-bundles/
+*.termly-release.zip
+termly-phase5-release-maintenance/
+termly-phase5-release-maintenance.zip

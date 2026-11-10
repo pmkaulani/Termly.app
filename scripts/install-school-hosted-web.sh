@@ -10,6 +10,10 @@ if [ ! -f "$DEPLOY_DIR/runtime/termly-runtime-config.js" ]; then
   exit 1
 fi
 
+if [ ! -f "$DEPLOY_DIR/runtime/termly-update-status.json" ]; then
+  cp "$DEPLOY_DIR/runtime/termly-update-status.json.example" "$DEPLOY_DIR/runtime/termly-update-status.json"
+fi
+
 if [ ! -f "$DEPLOY_DIR/.env" ]; then
   cp "$DEPLOY_DIR/.env.example" "$DEPLOY_DIR/.env"
   echo "Created $DEPLOY_DIR/.env from example. Review TERMLY_WEB_BIND and TERMLY_WEB_PORT."

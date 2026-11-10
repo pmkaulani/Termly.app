@@ -11,6 +11,7 @@ services:
       - "${TERMLY_WEB_BIND:-0.0.0.0}:${TERMLY_WEB_PORT:-8080}:8080"
     volumes:
       - ./runtime/termly-runtime-config.js:/usr/share/nginx/html/termly-runtime-config.js:ro
+      - ./runtime/termly-update-status.json:/usr/share/nginx/html/termly-update-status.json:ro
     read_only: true
     tmpfs:
       - /var/cache/nginx
