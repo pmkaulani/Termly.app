@@ -54,12 +54,16 @@ export const statusLabel = (s) => {
 
 export const sPill = (s) => {
   if (s === 'Active')                      return 'pill pill-v';
+  if (s === 'Perpetual')                   return 'pill pill-v';
   if (s === 'Suspended')                   return 'pill pill-y';
   if (s === 'Expired' || s === 'Deactivated') return 'pill pill-r';
   return 'pill pill-s';
 };
 
 export const getStatusRefined = (p, isActive) => {
+  if (String(p?.license_type || '').toLowerCase() === 'perpetual'
+      && String(p?.license_status || '').toLowerCase() === 'active'
+      && isActive) return 'Perpetual';
   const s = p?.subscription_status || 'Inactive';
   if (s === 'Deactivated' || s === 'Suspended') return s;
   if (isActive) return 'Active';

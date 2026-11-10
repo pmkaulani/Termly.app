@@ -48,7 +48,8 @@ serve(async (req) => {
 
     const { data: expiringProfiles, error: fetchError } = await supabaseClient
       .from('school_profiles')
-      .select('school_id, school_name, subscription_expiry, schools(email, phone)')
+      .select('school_id, school_name, subscription_expiry, license_type, schools(email, phone)')
+      .neq('license_type', 'perpetual')
       .lt('subscription_expiry', nextWeek.toISOString())
       .gt('subscription_expiry', new Date().toISOString())
 

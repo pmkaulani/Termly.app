@@ -156,10 +156,15 @@ export default function SchoolsTab({
                           <span className={sPill(getStatusRefined(p, isActive))}>
                             {getStatusRefined(p, isActive)}
                           </span>
-                          {p.subscription_expiry && (
+                          {String(p.license_type || '').toLowerCase() === 'perpetual' ? (
+                            <span style={{ fontSize: '0.68rem', color: 'var(--muted)', fontWeight: 500 }}>Lifetime licence</span>
+                          ) : p.subscription_expiry && (
                             <span style={{ fontSize: '0.68rem', color: 'var(--muted)', fontWeight: 500 }}>
                               Exp: {fmtDate(p.subscription_expiry)}
                             </span>
+                          )}
+                          {p.license_support_until && String(p.license_type || '').toLowerCase() === 'perpetual' && (
+                            <span style={{ fontSize: '0.64rem', color: 'var(--muted)' }}>Support to: {fmtDate(p.license_support_until)}</span>
                           )}
                         </div>
                       </td>
