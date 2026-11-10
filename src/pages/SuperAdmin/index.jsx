@@ -185,6 +185,13 @@ export default function SuperAdmin({ currentUser, isPlatformAdmin, sidebarOpen, 
     if (statusLower === 'deactivated' || statusLower === 'suspended') return false;
     if (p && (p.subscription_status === 'Deactivated' || p.subscription_status === 'Suspended')) return false;
 
+    const perpetualProfile = profiles.find((prof) => String(prof.license_type || '').toLowerCase() === 'perpetual');
+    if (perpetualProfile) {
+      return String(perpetualProfile.license_status || '').toLowerCase() === 'active'
+        && String(perpetualProfile.subscription_status || '').toLowerCase() === 'active'
+        && statusLower === 'active';
+    }
+
     // Termly HQ, Platform Admin, and Sandbox NEVER expire automatically
     if (nameLower.includes('termly hq') || planLower === 'platform admin' || planLower === 'sandbox') return true;
 

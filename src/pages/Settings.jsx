@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { getSchoolProfile, saveSchoolProfile, importData, exportData, getCurrentAuthUser, getCurrentPeriodId, getPortalAccessSettings, updatePortalAccessSettings } from '../data/coreStore';
+import { getSchoolProfile, refreshSchoolProfile, saveSchoolProfile, importData, exportData, getCurrentAuthUser, getCurrentPeriodId, getPortalAccessSettings, updatePortalAccessSettings } from '../data/coreStore';
 import { applyFeeStructure, getPeriods, createPeriod, setActivePeriod, subscribeToTable } from '../data/academicsStore';
 import { testMpesaConnection } from '../data/financeStore';
 import { testSmsConnection } from '../data/smsStore';
@@ -15,6 +15,7 @@ import { useFeature } from '../contexts/FeaturesContext';
 import Cropper from 'react-easy-crop';
 import getCroppedImg from '../utils/cropImage';
 import ImageUploadField from '../components/Common/ImageUploadField';
+import PerpetualLicensePanel from '../components/settings/PerpetualLicensePanel';
 import { uploadSchoolLogo } from '../lib/storageHelpers';
 import {
   ClockIcon, CheckIcon, SaveIcon, SchoolIcon, ImageIcon, FolderIcon,

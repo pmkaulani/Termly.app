@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, Component, lazy, Suspense } from 'react';
 import { Routes, Route, NavLink, useLocation, Navigate } from 'react-router-dom';
 import { supabase } from './lib/supabase';
-import { getSchoolProfile, setCurrentSchoolContext, setCurrentPeriodId, getCurrentPeriodId, checkIsPlatformAdmin, isFeatureEnabled, checkIsSubscriptionActive, subscribeToSchoolChanges, isShadowMode, getPlatformSettings } from './data/coreStore';
+import { getSchoolProfile, refreshSchoolProfile, setCurrentSchoolContext, setCurrentPeriodId, getCurrentPeriodId, checkIsPlatformAdmin, isFeatureEnabled, checkIsSubscriptionActive, subscribeToSchoolChanges, isShadowMode, getPlatformSettings } from './data/coreStore';
 import { getUserByAuthId } from './data/authStore';
 import { getPeriods, setActivePeriod, initActivePeriod, getUnreadNotificationCount, subscribeToNotifications, getNotifications, markNotificationRead, markAllNotificationsRead } from './data/academicsStore';
 
@@ -54,6 +54,7 @@ const StaffLogin      = lazy(() => import('./pages/StaffPortal/StaffLogin'));
 import { initAnalytics, trackEvent } from './utils/analytics';
 import Loader          from './components/Common/Loader';
 import SyncIndicator from './components/Common/SyncIndicator';
+import PerpetualLicensePanel from './components/settings/PerpetualLicensePanel';
 import PricingUpgrade from './components/PricingUpgrade';
 import Select from './components/Common/Select';
 import { ErrorBoundary } from './components/ErrorBoundary';

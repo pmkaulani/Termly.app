@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabase';
+import { isSchoolAccessActive } from '../utils/schoolEntitlement.mjs';
 
 export { supabase };
 
@@ -381,6 +382,16 @@ export async function getSchoolProfileBySchoolId(schoolId) {
     subscriptionPlan: sch.plan || prof.subscription_plan || 'Free',
     subscriptionStatus: sch.status || prof.subscription_status || 'Active',
     subscriptionExpiry: sch.subscription_expiry || prof.subscription_expiry || null,
+    licenseType: prof.license_type || 'subscription',
+    licenseStatus: prof.license_status || 'active',
+    licenseId: prof.license_id || null,
+    licenseIssuedAt: prof.license_issued_at || null,
+    licenseSupportUntil: prof.license_support_until || null,
+    licenseReference: prof.license_reference || null,
+    license_type: prof.license_type || 'subscription',
+    license_status: prof.license_status || 'active',
+    licenseWorkspaceStatus: sch.status || 'Active',
+    licenseSubscriptionStatus: prof.subscription_status || sch.status || 'Active',
     logoUrl: prof.logo_url || prof.logo || '',
     logo: prof.logo || prof.logo_url || '',
     primaryColor: prof.primary_color || (typeof localStorage !== 'undefined' ? localStorage.getItem(`Termly_primary_color_${schoolId}`) : null) || null,
@@ -415,35 +426,7 @@ export async function getSchoolProfileBySchoolId(schoolId) {
 }
 
 export function checkIsSubscriptionActive(profile) {
-  if (!profile) return false;
-  
-  // Platform Admin (Super Admin) NEVER gets blocked
-  if (profile.subscriptionPlan === 'Platform Admin') return true;
-
-  const status = String(profile.subscriptionStatus || profile.subscription_status || '').toLowerCase().trim();
-  const plan = String(profile.subscriptionPlan || profile.subscription_plan || '').toLowerCase().trim();
-  
-  // Explicitly block inactive, deactivated, suspended, expired, or missing status
-  if (!status || ['inactive', 'deactivated', 'suspended', 'expired'].includes(status)) {
-    return false;
-  }
-
-  // Must be explicitly 'active' or 'sandbox'
-  if (status !== 'active' && plan !== 'sandbox') {
-    return false;
-  }
-
-  // Enforce explicit subscription expiry date
-  const expiry = profile.subscriptionExpiry || profile.subscription_expiry;
-  if (expiry) {
-    const expDate = new Date(expiry);
-    expDate.setHours(23, 59, 59, 999);
-    if (expDate < new Date()) {
-      return false;
-    }
-  }
-
-  return true;
+  return isSchoolAccessActive(profile);
 }
 
 export async function checkFeatureAccess(featureKey, profile) {
@@ -479,6 +462,12 @@ export async function checkIsPlatformAdmin(email) {
 // ============= SCHOOL PROFILE CRUD =============
 
 let _profileCache = null;
+
+export async function refreshSchoolProfile() {
+  if (!_currentSchoolId) return null;
+  _profileCache = null;
+  return getSchoolProfile();
+}
 
 export async function getSchoolProfile() {
   if (!_currentSchoolId) return null;
@@ -713,13 +702,30 @@ export async function updateSchoolLimits(schoolId, { students, staff }) {
 
 export async function deactivateSchool(schoolId, reason = null) {
   const pastDate = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const { data: licenseData, error: licenseReadError } = await supabase.from('school_profiles')
+    .select('school_id, license_type').eq('school_id', schoolId).maybeSingle();
+  if (licenseReadError) throw licenseReadError;
+
   const { error: e0 } = await supabase.from('schools')
     .update({ status: 'Inactive' })
     .eq('id', schoolId);
   if (e0) throw e0;
 
-  const { error: e1 } = await supabase.from('school_profiles')
-    .upsert({ school_id: schoolId, subscription_status: 'Inactive', subscription_expiry: pastDate, status_notes: reason }, { onConflict: 'school_id' });
+  const profileUpdate = {
+    school_id: schoolId,
+    subscription_status: 'Inactive',
+    subscription_expiry: pastDate,
+    status_notes: reason,
+  };
+  if (String(licenseData?.license_type || '').toLowerCase() === 'perpetual') {
+    profileUpdate.subscription_status = 'Suspended';
+    profileUpdate.license_status = 'suspended';
+  }
+
+  const profileWrite = licenseData
+    ? supabase.from('school_profiles').update(profileUpdate).eq('school_id', schoolId)
+    : supabase.from('school_profiles').upsert(profileUpdate, { onConflict: 'school_id' });
+  const { error: e1 } = await profileWrite;
   if (e1) throw e1;
 
   const { error: e2 } = await supabase.from('school_features')
@@ -734,7 +740,52 @@ export async function deactivateSchool(schoolId, reason = null) {
 
 export async function restoreSchool(schoolId, monthsToAdd = 4, notes = null) {
   const { data: profileData } = await supabase.from('school_profiles')
-    .select('subscription_expiry').eq('school_id', schoolId).maybeSingle();
+    .select('subscription_expiry, license_type, license_status, license_feature_keys').eq('school_id', schoolId).maybeSingle();
+
+  if (String(profileData?.license_type || '').toLowerCase() === 'perpetual') {
+    if (String(profileData?.license_status || '').toLowerCase() === 'active') {
+      const { data: workspace, error: workspaceError } = await supabase.from('schools')
+        .select('status').eq('id', schoolId).maybeSingle();
+      if (workspaceError) throw workspaceError;
+      if (String(workspace?.status || '').toLowerCase() === 'active') return;
+    }
+    if (String(profileData?.license_status || '').toLowerCase() !== 'suspended') {
+      throw new Error('This perpetual licence is not suspended. Only a suspended perpetual licence can be restored here.');
+    }
+
+    const featureKeys = Array.isArray(profileData?.license_feature_keys)
+      ? profileData.license_feature_keys.filter((key) => typeof key === 'string')
+      : [];
+    if (!featureKeys.length) throw new Error('The stored perpetual licence feature snapshot is missing. Contact Termly support before restoring access.');
+
+    const { error: schoolError } = await supabase.from('schools')
+      .update({ status: 'Active' }).eq('id', schoolId);
+    if (schoolError) throw schoolError;
+
+    const { error: profileError } = await supabase.from('school_profiles')
+      .update({
+        license_status: 'active',
+        subscription_status: 'Active',
+        subscription_expiry: null,
+        status_notes: notes,
+      }).eq('school_id', schoolId);
+    if (profileError) throw profileError;
+
+    if (featureKeys.length) {
+      const { error: featureError } = await supabase.from('school_features')
+        .update({ expires_at: null, updated_at: new Date().toISOString() })
+        .eq('school_id', schoolId)
+        .eq('is_enabled', true)
+        .in('feature_key', featureKeys);
+      if (featureError) throw featureError;
+    }
+
+    invalidateFeatureCache(schoolId);
+    invalidateCache(`profile_${schoolId}`);
+    window.dispatchEvent(new Event('schoolProfileChanged'));
+    await logPlatformActivity('RESTORATION', `Perpetual Termly licence restored for school ${schoolId}`, schoolId);
+    return;
+  }
 
   let expiry = new Date();
   if (profileData?.subscription_expiry) {
