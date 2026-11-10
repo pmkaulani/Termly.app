@@ -1,0 +1,10 @@
+{
+  "product": "termly",
+  "version": "0.0.0",
+  "channel": "stable",
+  "previousVersion": null,
+  "installedAt": null,
+  "updatedAt": null,
+  "migrationCount": 0,
+  "updateMethod": "initial-install"
+}
