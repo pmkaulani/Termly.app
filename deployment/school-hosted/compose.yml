@@ -12,6 +12,7 @@ services:
     volumes:
       - ./runtime/termly-runtime-config.js:/usr/share/nginx/html/termly-runtime-config.js:ro
       - ./runtime/termly-update-status.json:/usr/share/nginx/html/termly-update-status.json:ro
+      - ./runtime/termly-health-status.json:/usr/share/nginx/html/termly-health-status.json:ro
     read_only: true
     tmpfs:
       - /var/cache/nginx

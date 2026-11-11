@@ -17,6 +17,7 @@ import getCroppedImg from '../utils/cropImage';
 import ImageUploadField from '../components/Common/ImageUploadField';
 import PerpetualLicensePanel from '../components/settings/PerpetualLicensePanel';
 import SchoolHostedMaintenancePanel from '../components/settings/SchoolHostedMaintenancePanel';
+import SchoolHostedHealthPanel from '../components/settings/SchoolHostedHealthPanel';
 import { uploadSchoolLogo } from '../lib/storageHelpers';
 import {
   ClockIcon, CheckIcon, SaveIcon, SchoolIcon, ImageIcon, FolderIcon,
@@ -565,6 +566,7 @@ export default function Settings() {
       )}
 
       {isAdmin && <SchoolHostedMaintenancePanel profile={profile} />}
+      {isAdmin && <SchoolHostedHealthPanel />}
 
       <div style={{display:'flex',flexDirection:'column',gap:24}}>
 

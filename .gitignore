@@ -69,3 +69,12 @@ release-bundles/
 *.termly-release.zip
 termly-phase5-release-maintenance/
 termly-phase5-release-maintenance.zip
+deployment/school-hosted/runtime/termly-health-status.json
+deployment/school-hosted/monitor/monitor.env
+termly-phase6-operations-monitoring/
+termly-phase6-operations-monitoring.zip
+support-bundle-*
+*.age
+*.age.sha256
+__pycache__/
+*.py[cod]
