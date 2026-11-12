@@ -185,6 +185,13 @@ export default function SuperAdmin({ currentUser, isPlatformAdmin, sidebarOpen, 
     if (statusLower === 'deactivated' || statusLower === 'suspended') return false;
     if (p && (p.subscription_status === 'Deactivated' || p.subscription_status === 'Suspended')) return false;
 
+    const perpetualProfile = profiles.find((prof) => String(prof.license_type || '').toLowerCase() === 'perpetual');
+    if (perpetualProfile) {
+      return String(perpetualProfile.license_status || '').toLowerCase() === 'active'
+        && String(perpetualProfile.subscription_status || '').toLowerCase() === 'active'
+        && statusLower === 'active';
+    }
+
     // Termly HQ, Platform Admin, and Sandbox NEVER expire automatically
     if (nameLower.includes('termly hq') || planLower === 'platform admin' || planLower === 'sandbox') return true;
 
@@ -346,6 +353,7 @@ export default function SuperAdmin({ currentUser, isPlatformAdmin, sidebarOpen, 
 
   const handleDeactivate = async (schoolId, name) => {
     const ok = await confirm({ title: 'Deactivate School', message: `Are you sure you want to deactivate ${name}? This will lock all their features immediately.`, confirmText: 'Deactivate', variant: 'danger' });
+    if (!ok) return;
     const reason = await prompt({ title: 'Deactivation Reason', message: 'Why is this school being deactivated? (Optional)', inputPlaceholder: 'e.g. Non-payment, violation of terms...', confirmText: 'Confirm Deactivation' });
     // Note: If user cancels prompt, it returns null. We still allow empty string but check for null to abort.
     if (reason === null) return;

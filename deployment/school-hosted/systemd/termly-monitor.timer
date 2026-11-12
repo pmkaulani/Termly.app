@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Termly school-hosted health checks every five minutes
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=5min
+AccuracySec=1min
+Persistent=true
+Unit=termly-monitor.service
+
+[Install]
+WantedBy=timers.target

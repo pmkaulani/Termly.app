@@ -9,6 +9,7 @@ import { getFeeSummary, getPayments } from './financeStore';
 import { getCurrentPeriodDetails } from './academicsStore';
 import { TERM_FEE, CBC_STRUCTURE, getSubjectsForGrade } from './seedData';
 import { jsPDF } from 'jspdf';
+import { hasImportValue } from '../utils/importSafety.mjs';
 
 export function calculateInitialStudentFee(className, residenceType = 'day', profile = {}, termName = null) {
   const feeConfig = profile?.gradeFees?.[className];
@@ -88,6 +89,52 @@ export async function getStudents() {
   if (error) throw error;
   if (data) await db.students.bulkPut(data.map(s => ({ ...s, school_id: _currentSchoolId })));
   return (data || []).map(s => ({
+    ...s,
+    admNo: s.adm_no,
+    residenceType: s.residence_type || 'day',
+    house: s.house || null,
+    parentPhone: s.parent_phone,
+    joinDate: s.join_date,
+    birthCertNo: s.birth_cert_no,
+    fatherName: s.father_name,
+    fatherPhone: s.father_phone,
+    motherName: s.mother_name,
+    motherPhone: s.mother_phone,
+    nemisVerified: s.nemis_verified,
+    status: s.status || 'Active'
+  }));
+}
+
+/**
+ * Authoritative cloud read for import duplicate checks. Unlike getStudents(),
+ * this bypasses the offline-first cache and fetches every page before writes.
+ */
+export async function getStudentsFresh() {
+  if (!_currentSchoolId) return [];
+  const pageSize = 500;
+  const allRows = [];
+  for (let offset = 0; ; offset += pageSize) {
+    let query = supabase
+      .from('students')
+      .select('*')
+      .eq('school_id', _currentSchoolId)
+      .order('name');
+    if (typeof query?.range === 'function') {
+      query = query.range(offset, offset + pageSize - 1);
+    }
+    const { data, error } = await query;
+    if (error) throw error;
+    const page = data || [];
+    allRows.push(...page);
+    if (page.length < pageSize || typeof query?.range !== 'function') break;
+  }
+  try {
+    await db?.students?.bulkPut?.(allRows.map((student) => ({ ...student, school_id: _currentSchoolId })));
+  } catch (_) {
+    // Gracefully handle missing IndexedDB in test/unsupported environments
+  }
+  window.dispatchEvent(new Event('studentsSynced'));
+  return allRows.map((s) => ({
     ...s,
     admNo: s.adm_no,
     residenceType: s.residence_type || 'day',
@@ -399,9 +446,9 @@ export async function bulkImportStudents(studentsData, onProgress, options = {})
   mutationGuard('bulkImportStudents');
   if (!_currentSchoolId) throw new Error('No school context');
 
-  const { duplicateAction = 'skip' } = options; // 'skip' or 'update'
+  const { duplicateAction = 'skip', createInitialFees = true, defaultStatus = 'Active' } = options; // 'skip' or 'update'
   const profile = await getSchoolProfile();
-  const existingStudents = await getStudents();
+  const existingStudents = await getStudentsFresh();
   const existingMap = new Map();
   existingStudents.forEach(s => {
     const adm = String(s.admNo || s.adm_no || '').trim().toLowerCase();
@@ -458,14 +505,34 @@ export async function bulkImportStudents(studentsData, onProgress, options = {})
       parent_email: s.parentEmail || s.parent_email || null,
       residence_type: s.residence || s.residenceType || 'day',
       photo_path: s.photo_path || null,
-      status: 'Active',
+      status: s.status || defaultStatus,
       subjects: getSubjectsForGrade(className, profile)
     };
 
     if (existingMap.has(lowerAdm)) {
       const existing = existingMap.get(lowerAdm);
       if (duplicateAction === 'update') {
-        toUpdate.push({ id: existing.id, ...record });
+        // Blank spreadsheet cells mean "not supplied", not "erase the
+        // existing school record". Update only values actually provided.
+        const update = { id: existing.id, _rowNumber: rowNum };
+        const add = (key, value, transform = (item) => item) => {
+          if (hasImportValue(value)) update[key] = transform(value);
+        };
+        add('name', s.name, (value) => String(value).trim());
+        const incomingClass = s.class || s.class_grade;
+        add('class', incomingClass, (value) => String(value).trim());
+        if (hasImportValue(incomingClass)) update.subjects = getSubjectsForGrade(String(incomingClass).trim(), profile);
+        add('stream', s.stream);
+        add('gender', s.gender);
+        add('dob', s.dob);
+        add('parent', s.parent || s.parentName);
+        add('parent_phone', s.parentPhone || s.parent_phone);
+        add('parent_email', s.parentEmail || s.parent_email);
+        add('residence_type', s.residence || s.residenceType);
+        add('photo_path', s.photo_path);
+        add('status', s.status);
+        if (Array.isArray(s.subjects) && s.subjects.length > 0) update.subjects = s.subjects;
+        toUpdate.push(update);
       } else {
         skippedCount++;
       }
@@ -488,15 +555,18 @@ export async function bulkImportStudents(studentsData, onProgress, options = {})
     const activeExistingIds = new Set(existingStudents
       .filter(student => (student.status || 'Active') === 'Active')
       .map(student => student.id));
-    const reactivatedCount = toUpdate.filter(update => !activeExistingIds.has(update.id)).length;
-    const projectedCount = (activeCount || 0) + toInsert.length + reactivatedCount;
+    const newActiveCount = toInsert.filter(student => student.status === 'Active').length;
+    const reactivatedCount = toUpdate.filter(update => update.status === 'Active' && !activeExistingIds.has(update.id)).length;
+    const projectedCount = (activeCount || 0) + newActiveCount + reactivatedCount;
     if (projectedCount > configuredLimit) {
-      throw new Error(`This import would exceed your school's active student limit (${configuredLimit}). Current active students: ${activeCount || 0}; new/reactivated students: ${toInsert.length + reactivatedCount}. Increase the school limit or split the import after freeing active places.`);
+      throw new Error(`This import would exceed your school's active student limit (${configuredLimit}). Current active students: ${activeCount || 0}; new/reactivated students: ${newActiveCount + reactivatedCount}. Increase the school limit or split the import after freeing active places.`);
     }
   }
 
   let termName = null;
-  try { const period = await getCurrentPeriodDetails(); termName = period?.term || null; } catch(e) {}
+  if (createInitialFees) {
+    try { const period = await getCurrentPeriodDetails(); termName = period?.term || null; } catch(e) {}
+  }
 
   // Execute Inserts in batches
   for (let i = 0; i < toInsert.length; i += BATCH_SIZE) {
@@ -517,36 +587,38 @@ export async function bulkImportStudents(studentsData, onProgress, options = {})
       const records = insertedData || dbPayload;
       insertedCount += records.length;
 
-      // Create fee records with active term-aware rates
+      // Historical migrations must not manufacture current-term invoices.
       for (let rIdx = 0; rIdx < records.length; rIdx++) {
         const rec = records[rIdx];
         const origBatchItem = batch[rIdx];
         try {
           if (rec.id) {
-            const calculatedFee = calculateInitialStudentFee(rec.class, rec.residence_type, profile, termName);
-            const { error: feeErr } = await supabase.from('fees').insert({
-              school_id: _currentSchoolId,
-              student_id: rec.id,
-              period_id: _currentPeriodId,
-              total_fee: calculatedFee,
-              paid: 0,
-              balance: calculatedFee
-            });
-            if (feeErr) {
-              console.error('Fee insertion error:', feeErr);
-              errors.push({
-                row: origBatchItem?._rowNumber || i + rIdx + 1,
-                name: rec.name,
-                reason: `Student created but fee record failed: ${feeErr.message}`
-              });
-            }
             await db.students.put(rec);
+            if (createInitialFees && rec.status === 'Active') {
+              const calculatedFee = calculateInitialStudentFee(rec.class, rec.residence_type, profile, termName);
+              const { error: feeErr } = await supabase.from('fees').insert({
+                school_id: _currentSchoolId,
+                student_id: rec.id,
+                period_id: _currentPeriodId,
+                total_fee: calculatedFee,
+                paid: 0,
+                balance: calculatedFee
+              });
+              if (feeErr) {
+                console.error('Fee insertion error:', feeErr);
+                errors.push({
+                  row: origBatchItem?._rowNumber || i + rIdx + 1,
+                  name: rec.name,
+                  reason: `Student created but fee record failed: ${feeErr.message}`
+                });
+              }
+            }
           }
         } catch (e) {
           errors.push({
             row: origBatchItem?._rowNumber || i + rIdx + 1,
             name: rec.name,
-            reason: `Student created but fee record failed: ${e.message}`
+            reason: `Student created but local cache/fee update failed: ${e.message}`
           });
         }
       }

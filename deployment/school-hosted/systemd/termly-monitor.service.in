@@ -1,0 +1,16 @@
+[Unit]
+Description=Termly school-hosted health monitor
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/local/sbin/termly-school-hosted-monitor
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=@MONITOR_ROOT@/deployment/school-hosted/runtime /var/lib/termly-monitor

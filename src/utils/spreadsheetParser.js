@@ -14,6 +14,7 @@ export const FIELD_DEFINITIONS = [
   { key: 'residence', label: 'Residence / Boarding', required: false, aliases: ['residence', 'residence type', 'boarding', 'day/boarding', 'day or boarding', 'hostel'] },
   { key: 'upi', label: 'UPI / NEMIS No', required: false, aliases: ['upi', 'nemis', 'nemis no', 'upi no', 'upi/nemis'] },
   { key: 'birthCertNo', label: 'Birth Certificate No', required: false, aliases: ['birth cert no', 'birth certificate', 'birth certificate no', 'cert no'] },
+  { key: 'status', label: 'Enrollment Status', required: false, aliases: ['status', 'student status', 'learner status', 'enrollment status', 'enrolment status'] },
   { key: 'photoFile', label: 'Photo Filename', required: false, aliases: ['photo', 'photo filename', 'image', 'picture', 'photo file'] }
 ];
 
@@ -371,6 +372,25 @@ export function validateImportRows(rawRows, headerRowIdx, mappings, {
       }
     }
 
+    // Preserve known historical enrollment states. Unknown values must be
+    // reviewed rather than silently turning former learners into active ones.
+    if (record.status) {
+      const statusValue = normalizeHeader(record.status);
+      const statusMap = {
+        active: 'Active', current: 'Active', enrolled: 'Active',
+        inactive: 'Inactive', archived: 'Inactive',
+        transferred: 'Transferred', 'transferred out': 'Transferred',
+        graduated: 'Graduated', alumni: 'Graduated', completed: 'Graduated',
+        left: 'Left', withdrawn: 'Left', discontinued: 'Left',
+        suspended: 'Suspended'
+      };
+      if (statusMap[statusValue]) {
+        record.status = statusMap[statusValue];
+      } else {
+        rowErrors.status = `Unrecognised enrollment status "${record.status}". Map it to a supported status before importing.`;
+      }
+    }
+
     const hasErrors = Object.keys(rowErrors).length > 0;
     if (!hasErrors) validCount++;
 
@@ -398,6 +418,8 @@ export function validateImportRows(rawRows, headerRowIdx, mappings, {
 /**
  * Validates teacher mapped rows
  */
+import { normalizeTeacherImportStatus } from './importSafety.mjs';
+
 export function validateTeacherImportRows(rawRows, headerRowIdx, mappings, {
   existingTeachers = [],
   availableSubjects = []
@@ -486,11 +508,15 @@ export function validateTeacherImportRows(rawRows, headerRowIdx, mappings, {
       record._parsedSubjects = [];
     }
 
-    // 5. Status normalization
-    if (!record.status || !['active', 'left'].includes(record.status.toLowerCase())) {
-      record.status = 'Active';
-    } else {
-      record.status = record.status.toLowerCase() === 'left' ? 'Left' : 'Active';
+    // 5. Preserve recognized employment states. Unknown values are errors;
+    // they must never silently reactivate a former or suspended employee.
+    if (record.status) {
+      const normalizedStatus = normalizeTeacherImportStatus(record.status);
+      if (!normalizedStatus) {
+        rowErrors.status = `Unrecognised teacher status "${record.status}". Map it to Active, Left, Inactive, Suspended, Retired or On Leave.`;
+      } else {
+        record.status = normalizedStatus;
+      }
     }
 
     const hasErrors = Object.keys(rowErrors).length > 0;

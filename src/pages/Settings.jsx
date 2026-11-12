@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { getSchoolProfile, saveSchoolProfile, importData, exportData, getCurrentAuthUser, getCurrentPeriodId, getPortalAccessSettings, updatePortalAccessSettings } from '../data/coreStore';
+import { getSchoolProfile, refreshSchoolProfile, saveSchoolProfile, importData, exportData, getCurrentAuthUser, getCurrentPeriodId, getPortalAccessSettings, updatePortalAccessSettings } from '../data/coreStore';
 import { applyFeeStructure, getPeriods, createPeriod, setActivePeriod, subscribeToTable } from '../data/academicsStore';
 import { testMpesaConnection } from '../data/financeStore';
 import { testSmsConnection } from '../data/smsStore';
@@ -15,6 +15,9 @@ import { useFeature } from '../contexts/FeaturesContext';
 import Cropper from 'react-easy-crop';
 import getCroppedImg from '../utils/cropImage';
 import ImageUploadField from '../components/Common/ImageUploadField';
+import PerpetualLicensePanel from '../components/settings/PerpetualLicensePanel';
+import SchoolHostedMaintenancePanel from '../components/settings/SchoolHostedMaintenancePanel';
+import SchoolHostedHealthPanel from '../components/settings/SchoolHostedHealthPanel';
 import { uploadSchoolLogo } from '../lib/storageHelpers';
 import {
   ClockIcon, CheckIcon, SaveIcon, SchoolIcon, ImageIcon, FolderIcon,
@@ -107,7 +110,7 @@ export default function Settings() {
         const authUser = await getCurrentAuthUser();
         if (authUser) {
           const userData = await getUserRole(authUser.id);
-          setIsAdmin(userData?.role === 'Admin');
+          setIsAdmin(['admin', 'owner'].includes(String(userData?.role || '').toLowerCase()));
         }
       }catch(e){console.error(e);}
     })();
@@ -547,6 +550,23 @@ export default function Settings() {
           </button>
         </div>
       </div>
+
+      {isAdmin && (
+        <div style={{ marginBottom: 24 }}>
+          <PerpetualLicensePanel
+            profile={profile}
+            isAdmin={isAdmin}
+            onActivated={async () => {
+              const refreshed = await refreshSchoolProfile();
+              if (refreshed) setProfile((current) => ({ ...current, ...refreshed }));
+              window.dispatchEvent(new Event('schoolProfileChanged'));
+            }}
+          />
+        </div>
+      )}
+
+      {isAdmin && <SchoolHostedMaintenancePanel profile={profile} />}
+      {isAdmin && <SchoolHostedHealthPanel />}
 
       <div style={{display:'flex',flexDirection:'column',gap:24}}>
 

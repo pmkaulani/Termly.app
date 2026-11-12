@@ -2,6 +2,7 @@ import { supabase } from '../lib/supabase';
 import { db } from './offlineStore';
 import { _currentSchoolId, shouldFetchCloud, logAuditEvent, getSchoolProfile, logPlatformActivity } from './coreStore';
 import { sanitizeString, sanitizeName } from '../utils/sanitize';
+import { hasImportValue } from '../utils/importSafety.mjs';
 
 // ============= TEACHERS & STAFF STORE MODULE =============
 
@@ -50,6 +51,35 @@ export async function getTeachers() {
   if (error) throw error;
   if (data) await db.teachers.bulkPut(data.map(t => ({ ...t, school_id: _currentSchoolId })));
   return data || [];
+}
+
+/** Authoritative, paginated cloud read for teacher imports (bypasses Dexie SWR). */
+export async function getTeachersFreshBySchool(schoolId = _currentSchoolId) {
+  if (!schoolId) return [];
+  const pageSize = 500;
+  const allRows = [];
+  for (let offset = 0; ; offset += pageSize) {
+    let query = supabase
+      .from('teachers')
+      .select('id, name, email, phone, subjects, school_id, on_leave, staff_code, status, tsc_number, photo_path, photo_updated_at')
+      .eq('school_id', schoolId)
+      .order('staff_code', { ascending: true, nullsFirst: false })
+      .order('name', { ascending: true });
+    if (typeof query?.range === 'function') {
+      query = query.range(offset, offset + pageSize - 1);
+    }
+    const { data, error } = await query;
+    if (error) throw error;
+    const page = data || [];
+    allRows.push(...page);
+    if (page.length < pageSize || typeof query?.range !== 'function') break;
+  }
+  try {
+    await db?.teachers?.bulkPut?.(allRows.map((teacher) => ({ ...teacher, school_id: schoolId })));
+  } catch (_) {
+    // Gracefully handle missing IndexedDB in test/unsupported environments
+  }
+  return allRows;
 }
 
 export async function getAllSchoolStaff(schoolId) {
@@ -250,7 +280,7 @@ export async function bulkImportTeachers(teachersData, onProgress, options = {})
     .eq('status', 'Active');
   if (countErr) throw countErr;
 
-  const existingTeachers = await getTeachersBySchool(schoolId);
+  const existingTeachers = await getTeachersFreshBySchool(schoolId);
   const existingCodeMap = new Map();
   const existingPhoneMap = new Map();
 
@@ -280,7 +310,13 @@ export async function bulkImportTeachers(teachersData, onProgress, options = {})
     const email = sanitizeString(String(t.email || '').trim()) || null;
     const tscNumber = sanitizeString(String(t.tscNumber || t.tsc_number || '').trim()) || null;
     const subjects = Array.isArray(t.subjects) ? t.subjects : (t._parsedSubjects || []);
-    const status = String(t.status || 'Active').toLowerCase() === 'left' ? 'Left' : 'Active';
+    const rawStatus = String(t.status || '').trim();
+    const allowedStatuses = new Set(['Active', 'Left', 'Inactive', 'Suspended', 'Retired', 'On Leave']);
+    if (rawStatus && !allowedStatuses.has(rawStatus)) {
+      errors.push({ row: rowNum, name: name || 'Unknown', reason: `Unsupported teacher status: ${rawStatus}` });
+      return;
+    }
+    const status = rawStatus || 'Active';
 
     if (!name || name.length < 2) {
       errors.push({ row: rowNum, name: name || 'Unknown', reason: 'Full name is required (min 2 chars)' });
@@ -326,7 +362,18 @@ export async function bulkImportTeachers(teachersData, onProgress, options = {})
 
     if (existing) {
       if (duplicateAction === 'update') {
-        toUpdate.push({ id: existing.id, ...record });
+        // Empty optional cells are omitted from UPDATE so they cannot erase
+        // contact details, staff codes, subjects or status already in Termly.
+        const update = { id: existing.id, _rowNumber: rowNum };
+        if (hasImportValue(t.name)) update.name = name;
+        if (hasImportValue(t.phone)) update.phone = phone;
+        if (hasImportValue(t.email)) update.email = email;
+        if (hasImportValue(t.subjects) || hasImportValue(t._parsedSubjects)) update.subjects = subjects;
+        if (hasImportValue(t.status)) update.status = status;
+        if (hasImportValue(t.tscNumber || t.tsc_number)) update.tsc_number = tscNumber;
+        if (hasImportValue(t.staffCode || t.staff_code)) update.staff_code = staffCode;
+        if (hasImportValue(t.photo_path)) update.photo_path = t.photo_path;
+        toUpdate.push(update);
       } else {
         skippedCount++;
       }
@@ -335,10 +382,16 @@ export async function bulkImportTeachers(teachersData, onProgress, options = {})
     }
   });
 
-  // Check capacity before inserting new active teachers
-  const newActiveCount = toInsert.filter(r => r.status === 'Active').length;
-  if (currentStaffCount !== null && (currentStaffCount + newActiveCount > configuredStaffLimit)) {
-    throw new Error(`This import would exceed your school's faculty capacity limit (${configuredStaffLimit}). Currently active: ${currentStaffCount}; new active: ${newActiveCount}.`);
+  // Include new staff and existing staff being reactivated by an update.
+  const newActiveCount = toInsert.filter((r) => r.status === 'Active').length;
+  const activeExistingIds = new Set(existingTeachers
+    .filter((teacher) => (teacher.status || 'Active') === 'Active')
+    .map((teacher) => teacher.id));
+  const reactivatedCount = toUpdate.filter((update) => update.status === 'Active' && !activeExistingIds.has(update.id)).length;
+  const deactivatedCount = toUpdate.filter((update) => update.status && update.status !== 'Active' && activeExistingIds.has(update.id)).length;
+  const projectedActiveCount = (currentStaffCount || 0) + newActiveCount + reactivatedCount - deactivatedCount;
+  if (currentStaffCount !== null && projectedActiveCount > configuredStaffLimit) {
+    throw new Error(`This import would exceed your school's faculty capacity limit (${configuredStaffLimit}). Currently active: ${currentStaffCount}; new/reactivated active: ${newActiveCount + reactivatedCount}; becoming inactive: ${deactivatedCount}.`);
   }
 
   // Execute Inserts in batches

@@ -1,0 +1,14 @@
+{
+  "product": "termly",
+  "schemaVersion": 1,
+  "checkedAt": null,
+  "overall": "unknown",
+  "checks": [
+    {
+      "id": "web",
+      "label": "Termly web app",
+      "status": "unknown",
+      "message": "The host monitor has not run yet."
+    }
+  ]
+}

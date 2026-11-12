@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useDialog } from '../contexts/DialogContext';
-import { bulkImportStudents, getStudents } from '../data/studentStore';
+import { bulkImportStudents, getStudentsFresh } from '../data/studentStore';
 import {
   readSpreadsheetFile,
   autoDetectColumnMappings,
@@ -15,7 +15,7 @@ import {
   XIcon, FileIcon
 } from './CommonIcons';
 
-export default function StudentImporter({ profile = {}, onImport, onClose }) {
+export default function StudentImporter({ profile = {}, onImport, onClose, mode = 'standard' }) {
   const { alert, confirm } = useDialog();
 
   // Step 1: Upload, Step 2: Select Sheet, Step 3: Map Columns, Step 4 & 5 & 6: Validate/Preview/Fix, Step 7 & 8: Import, Step 9: Result
@@ -40,7 +40,7 @@ export default function StudentImporter({ profile = {}, onImport, onClose }) {
 
   // Load existing DB students on mount for duplicate detection
   useEffect(() => {
-    getStudents().then(students => {
+    getStudentsFresh().then(students => {
       setExistingDbStudents(students || []);
     }).catch(() => {
       setExistingDbStudents([]);
@@ -159,6 +159,9 @@ export default function StudentImporter({ profile = {}, onImport, onClose }) {
     else if (activeClasses.length > 0 && !activeClasses.includes(row.class)) {
       errors.class = `"${row.class}" is not in active classes`;
     }
+    if (row.status && !['Active', 'Inactive', 'Transferred', 'Graduated', 'Left', 'Suspended'].includes(row.status)) {
+      errors.status = 'Use Active, Inactive, Transferred, Graduated, Left or Suspended.';
+    }
 
     row._errors = errors;
     row._isValid = Object.keys(errors).length === 0;
@@ -198,12 +201,22 @@ export default function StudentImporter({ profile = {}, onImport, onClose }) {
     try {
       const result = await bulkImportStudents(validRows, (current, total) => {
         setProgress({ current, total });
-      }, { duplicateAction });
+      }, {
+        duplicateAction,
+        // A historical migration must not create a fresh current-term invoice.
+        createInitialFees: mode !== 'migration'
+      });
 
-      setImportResult(result);
+      const completedResult = {
+        ...result,
+        totalRows: validatedData.summary.totalRows || validatedData.rows.length,
+        failed: (result.errors?.length || 0) + uncorrectedErrors,
+        sourceFileName: file?.name ? String(file.name).split('.').pop().toLowerCase() : null
+      };
+      setImportResult(completedResult);
       setStep(9); // Done
 
-      if (onImport) onImport(result);
+      if (onImport) onImport(completedResult);
     } catch (err) {
       alert({ title: 'Import Failed', message: err.message, variant: 'danger' });
       setStep(5);

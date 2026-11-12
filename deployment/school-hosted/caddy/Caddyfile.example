@@ -1,0 +1,15 @@
+# Example only. Replace both hostnames with names resolvable by the school's LAN DNS.
+# Install and trust Caddy's internal CA root certificate on every staff device.
+# Caddy proxies HTTPS to services bound to loopback on the server.
+
+termly.school.example {
+    tls internal
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:8080
+}
+
+api.termly.school.example {
+    tls internal
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:8000
+}

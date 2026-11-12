@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useDialog } from '../contexts/DialogContext';
-import { bulkImportTeachers, getTeachersBySchool } from '../data/staffStore';
+import { bulkImportTeachers, getTeachersFreshBySchool } from '../data/staffStore';
 import {
   readSpreadsheetFile,
   autoDetectColumnMappings,
@@ -40,7 +40,7 @@ export default function TeacherImporter({ profile = {}, onImport, onClose }) {
   // Load existing teachers on mount
   useEffect(() => {
     if (schoolId) {
-      getTeachersBySchool(schoolId)
+      getTeachersFreshBySchool(schoolId)
         .then(teachers => setExistingTeachers(teachers || []))
         .catch(() => setExistingTeachers([]));
     }
@@ -171,10 +171,16 @@ export default function TeacherImporter({ profile = {}, onImport, onClose }) {
         setProgress({ current, total });
       }, { duplicateAction });
 
-      setImportResult(result);
+      const completedResult = {
+        ...result,
+        totalRows: validatedData.summary.totalRows || validatedData.rows.length,
+        failed: (result.errors?.length || 0) + uncorrectedErrors,
+        sourceFileName: file?.name ? String(file.name).split('.').pop().toLowerCase() : null
+      };
+      setImportResult(completedResult);
       setStep(6); // Results Report
 
-      if (onImport) onImport(result);
+      if (onImport) onImport(completedResult);
     } catch (err) {
       alert({ title: 'Import Failed', message: err.message, variant: 'danger' });
       setStep(4);

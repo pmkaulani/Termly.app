@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, Component, lazy, Suspense } from 'react';
 import { Routes, Route, NavLink, useLocation, Navigate } from 'react-router-dom';
 import { supabase } from './lib/supabase';
-import { getSchoolProfile, setCurrentSchoolContext, setCurrentPeriodId, getCurrentPeriodId, checkIsPlatformAdmin, isFeatureEnabled, checkIsSubscriptionActive, subscribeToSchoolChanges, isShadowMode, getPlatformSettings } from './data/coreStore';
+import { getSchoolProfile, refreshSchoolProfile, setCurrentSchoolContext, setCurrentPeriodId, getCurrentPeriodId, checkIsPlatformAdmin, isFeatureEnabled, checkIsSubscriptionActive, subscribeToSchoolChanges, isShadowMode, getPlatformSettings } from './data/coreStore';
 import { getUserByAuthId } from './data/authStore';
 import { getPeriods, setActivePeriod, initActivePeriod, getUnreadNotificationCount, subscribeToNotifications, getNotifications, markNotificationRead, markAllNotificationsRead } from './data/academicsStore';
 
@@ -15,6 +15,7 @@ const Timetable    = lazy(() => import('./pages/Timetable'));
 const Attendance   = lazy(() => import('./pages/Attendance'));
 const Library      = lazy(() => import('./pages/Library/index'));
 const Settings     = lazy(() => import('./pages/Settings'));
+const MigrationCenter = lazy(() => import('./pages/MigrationCenter'));
 const Login        = lazy(() => import('./pages/Login'));
 const Security     = lazy(() => import('./pages/Security'));
 
@@ -53,6 +54,7 @@ const StaffLogin      = lazy(() => import('./pages/StaffPortal/StaffLogin'));
 import { initAnalytics, trackEvent } from './utils/analytics';
 import Loader          from './components/Common/Loader';
 import SyncIndicator from './components/Common/SyncIndicator';
+import PerpetualLicensePanel from './components/settings/PerpetualLicensePanel';
 import PricingUpgrade from './components/PricingUpgrade';
 import Select from './components/Common/Select';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -256,7 +258,7 @@ function Sidebar({ isOpen, onClose, onLogout, onLock, currentUser, subscriptionA
   // useEffect removed as FeaturesProvider handles real-time updates via events
 
   const role        = currentUser?.role?.toLowerCase() || 'teacher';
-  const isAdmin     = role === 'admin';
+  const isAdmin     = ['admin', 'owner'].includes(role);
   const isTeacher   = role === 'teacher';
   const isLibrarian = role === 'librarian';
   const isFinance   = role === 'finance';
@@ -436,6 +438,7 @@ function Sidebar({ isOpen, onClose, onLogout, onLock, currentUser, subscriptionA
           <>
             <SbSection label="System" />
             <SbLink to="/security" icon={SecurityIcon} label="Security" onClick={onClose} />
+            <SbLink to="/migration" icon={UploadIcon} label="Data Migration" onClick={onClose} />
             <SbLink to="/settings" icon={SettingsIcon} label="Settings" onClick={onClose} />
           </>
         )}
@@ -1075,6 +1078,7 @@ function SuspendedView({ profile, onLogout }) {
  
                       {/* Admin/Portal Management */}
                       <Route path="/security" element={(['owner', 'admin'].includes(String(currentUser?.role || '').toLowerCase())) ? <Security currentUser={currentUser} /> : <div role="alert" className="p-4">403 - Administrator access required.</div>} />
+                      <Route path="/migration" element={(['owner', 'admin'].includes(String(currentUser?.role || '').toLowerCase())) ? <MigrationCenter currentUser={currentUser} /> : <div role="alert" className="p-4">403 - Administrator access required.</div>} />
                       <Route path="/settings" element={(['owner', 'admin'].includes(String(currentUser?.role || '').toLowerCase())) ? <Settings currentUser={currentUser} /> : <div role="alert" className="p-4">403 - Administrator access required.</div>} />
                       <Route path="/portal/teacher" element={<SectionGate featureSlug="teacher_portal" featureName="Teacher Portal" profile={profile}><TeacherPortalAdmin /></SectionGate>} />
                       <Route path="/portal/parent"  element={<SectionGate featureSlug="parent_portal"  featureName="Parent Portal"  profile={profile}><ParentPortalAdmin /></SectionGate>} />

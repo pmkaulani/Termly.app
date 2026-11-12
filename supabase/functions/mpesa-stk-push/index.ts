@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 
-const allowedOrigins = [
+const defaultAllowedOrigins = [
   'https://termly.com',
   'https://app.termly.school',
   'http://localhost:5173',
@@ -10,11 +10,18 @@ const allowedOrigins = [
   'app://.'
 ];
 
+// A school-hosted deployment adds its exact Termly HTTPS origin via the
+// server-side TERMLY_ALLOWED_ORIGINS variable (comma-separated). No wildcard.
+const allowedOrigins = new Set([
+  ...defaultAllowedOrigins,
+  ...(Deno.env.get('TERMLY_ALLOWED_ORIGINS') || '').split(',').map(value => value.trim()).filter(Boolean)
+]);
+
 function getCorsHeaders(req: Request) {
   const origin = req.headers.get('origin') || '';
-  const allowedOrigin = allowedOrigins.includes(origin) ? origin : 'https://termly.com';
   return {
-    'Access-Control-Allow-Origin': allowedOrigin,
+    ...(origin && allowedOrigins.has(origin) ? { 'Access-Control-Allow-Origin': origin } : {}),
+    'Vary': 'Origin',
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-portal-token, x-session-token',
     'Access-Control-Allow-Methods': 'POST, OPTIONS'
   };
