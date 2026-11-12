@@ -178,7 +178,7 @@ export default function MigrationCenter({ currentUser }) {
           </label>
         </div>
         <p style={{ margin: '10px 0 0', fontSize: '.72rem', color: 'var(--text-light)', lineHeight: 1.5 }}>
-          These details are attached to the migration audit entry. Do not put learner names, admission numbers or sensitive personal details in the notes. Termly does not upload or retain the original spreadsheet in the migration history.
+          These details are attached to the migration audit entry. Do not put learner names, admission numbers or sensitive personal details in the notes. Termly does not upload or retain the original spreadsheet in the migration history. Imports are processed in batches; if a later batch fails, earlier successful rows remain saved. Review the result and reconcile failed rows before retrying the file.
         </p>
       </div>
 
@@ -259,7 +259,7 @@ export default function MigrationCenter({ currentUser }) {
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table className="data-table" style={{ width: '100%', minWidth: 720 }}>
-              <thead><tr><th>When</th><th>Dataset</th><th>Source</th><th>Result</th><th>Records</th><th>Status</th></tr></thead>
+              <thead><tr><th>When</th><th>Dataset</th><th>Source system</th><th>File type</th><th>Import result</th><th>Rows</th><th>Status</th></tr></thead>
               <tbody>
                 {history.map((batch) => (
                   <tr key={batch.id}>

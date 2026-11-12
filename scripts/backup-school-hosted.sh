@@ -43,9 +43,12 @@ done
 [[ -d "$SUPABASE_DIR/volumes/db/data" ]] || fail "Expected local PostgreSQL data path is missing: $SUPABASE_DIR/volumes/db/data"
 [[ -d "$SUPABASE_DIR/volumes/storage" ]] || fail "Expected file-based Storage path is missing: $SUPABASE_DIR/volumes/storage"
 [[ "$KEEP_DAYS" =~ ^[0-9]+$ ]] || fail "KEEP_DAYS must be a non-negative integer."
-if command -v flock >/dev/null 2>&1; then
-  exec 9>/run/lock/termly-school-hosted-backup.lock
-  flock -n 9 || fail 'Another Termly backup is already running.'
+if [[ "${TERMLY_MAINTENANCE_LOCK_HELD:-0}" != "1" ]]; then
+  command -v flock >/dev/null 2>&1 || fail 'flock is required for safe Termly maintenance coordination.'
+  MAINTENANCE_LOCK_FILE="${TERMLY_MAINTENANCE_LOCK_FILE:-/run/lock/termly-school-hosted-maintenance.lock}"
+  install -d -m 0755 "$(dirname "$MAINTENANCE_LOCK_FILE")"
+  exec 9>"$MAINTENANCE_LOCK_FILE"
+  flock -n 9 || fail 'Another Termly backup, restore or update is running.'
 fi
 
 SUPABASE_DIR="$(realpath "$SUPABASE_DIR")"

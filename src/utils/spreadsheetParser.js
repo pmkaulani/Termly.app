@@ -418,6 +418,8 @@ export function validateImportRows(rawRows, headerRowIdx, mappings, {
 /**
  * Validates teacher mapped rows
  */
+import { normalizeTeacherImportStatus } from './importSafety.mjs';
+
 export function validateTeacherImportRows(rawRows, headerRowIdx, mappings, {
   existingTeachers = [],
   availableSubjects = []
@@ -506,11 +508,15 @@ export function validateTeacherImportRows(rawRows, headerRowIdx, mappings, {
       record._parsedSubjects = [];
     }
 
-    // 5. Status normalization
-    if (!record.status || !['active', 'left'].includes(record.status.toLowerCase())) {
-      record.status = 'Active';
-    } else {
-      record.status = record.status.toLowerCase() === 'left' ? 'Left' : 'Active';
+    // 5. Preserve recognized employment states. Unknown values are errors;
+    // they must never silently reactivate a former or suspended employee.
+    if (record.status) {
+      const normalizedStatus = normalizeTeacherImportStatus(record.status);
+      if (!normalizedStatus) {
+        rowErrors.status = `Unrecognised teacher status "${record.status}". Map it to Active, Left, Inactive, Suspended, Retired or On Leave.`;
+      } else {
+        record.status = normalizedStatus;
+      }
     }
 
     const hasErrors = Object.keys(rowErrors).length > 0;

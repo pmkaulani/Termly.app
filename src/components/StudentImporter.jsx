@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useDialog } from '../contexts/DialogContext';
-import { bulkImportStudents, getStudents } from '../data/studentStore';
+import { bulkImportStudents, getStudentsFresh } from '../data/studentStore';
 import {
   readSpreadsheetFile,
   autoDetectColumnMappings,
@@ -40,7 +40,7 @@ export default function StudentImporter({ profile = {}, onImport, onClose, mode 
 
   // Load existing DB students on mount for duplicate detection
   useEffect(() => {
-    getStudents().then(students => {
+    getStudentsFresh().then(students => {
       setExistingDbStudents(students || []);
     }).catch(() => {
       setExistingDbStudents([]);

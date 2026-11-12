@@ -353,6 +353,7 @@ export default function SuperAdmin({ currentUser, isPlatformAdmin, sidebarOpen, 
 
   const handleDeactivate = async (schoolId, name) => {
     const ok = await confirm({ title: 'Deactivate School', message: `Are you sure you want to deactivate ${name}? This will lock all their features immediately.`, confirmText: 'Deactivate', variant: 'danger' });
+    if (!ok) return;
     const reason = await prompt({ title: 'Deactivation Reason', message: 'Why is this school being deactivated? (Optional)', inputPlaceholder: 'e.g. Non-payment, violation of terms...', confirmText: 'Confirm Deactivation' });
     // Note: If user cancels prompt, it returns null. We still allow empty string but check for null to abort.
     if (reason === null) return;

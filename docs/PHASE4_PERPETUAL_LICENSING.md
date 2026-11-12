@@ -127,9 +127,11 @@ The activation endpoint rejects a mismatched school ID, invalid signature, unsup
 
 ## 6. Suspend and restore
 
-Platform administrators may use the existing Deactivate/Activate school workflow. For perpetual schools, deactivation changes the licence status to `suspended` without converting it to a monthly/annual subscription. A school admin cannot bypass that suspension by uploading the same signed file again. Restoring a suspended perpetual school through the platform-admin workflow restores its active workspace and clears expiry only for the enabled features in its signed licence entitlement. It does not add subscription months.
+On the central cloud deployment, platform administrators may use the existing Deactivate/Activate school workflow. For perpetual schools, deactivation changes the licence status to `suspended` without converting it to a monthly/annual subscription. A school admin cannot bypass that suspension by uploading the same signed file again. Restoring a suspended perpetual school through the platform-admin workflow restores its active workspace and clears expiry only for the enabled features in its signed licence entitlement. It does not add subscription months.
 
-Use suspension only for a documented operational/security reason and record the reason in the existing school activity log. This is not an automated payment collection system.
+**School-hosted isolation boundary:** each independently hosted school has its own Supabase database. The central Termly Super Admin dashboard cannot remotely suspend or restore that isolated database merely by changing a record in the cloud database. In a school-hosted installation, suspension/restore is effective only for an administrator authenticated against that installation’s own database. Do not promise remote revocation for an isolated school-hosted deployment. A remote control plane would require a separately designed, authenticated, auditable communication channel; it must not become a compulsory online check for an already-purchased perpetual installation.
+
+Use suspension only for a documented operational/security reason and record the reason in the applicable installation’s audit log. This is not an automated payment collection system.
 
 ## 7. Validation checklist
 

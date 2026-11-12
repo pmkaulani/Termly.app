@@ -46,6 +46,7 @@ TERMLY_RELEASE_PUBLIC_KEY_FILE=$WORK/keys/release-public-key.pem
 TERMLY_BACKUP_SCRIPT=$WORK/backup/backup.sh
 TERMLY_BACKUP_ENV=$WORK/backup/backup.env
 TERMLY_VERIFY_SCRIPT=$ROOT_DIR/tools/releases/verify-release.mjs
+TERMLY_MAINTENANCE_LOCK_FILE=$WORK/maintenance.lock
 EOF2
 chmod 0600 "$WORK/update.env"
 

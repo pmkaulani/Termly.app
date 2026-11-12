@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useDialog } from '../contexts/DialogContext';
-import { bulkImportTeachers, getTeachersBySchool } from '../data/staffStore';
+import { bulkImportTeachers, getTeachersFreshBySchool } from '../data/staffStore';
 import {
   readSpreadsheetFile,
   autoDetectColumnMappings,
@@ -40,7 +40,7 @@ export default function TeacherImporter({ profile = {}, onImport, onClose }) {
   // Load existing teachers on mount
   useEffect(() => {
     if (schoolId) {
-      getTeachersBySchool(schoolId)
+      getTeachersFreshBySchool(schoolId)
         .then(teachers => setExistingTeachers(teachers || []))
         .catch(() => setExistingTeachers([]));
     }

@@ -57,6 +57,14 @@ cp "$input" "$out"
 MOCK_AGE
 chmod +x "$TMP/bin/age"
 
+if ! command -v flock >/dev/null 2>&1; then
+  cat > "$TMP/bin/flock" <<'MOCK_FLOCK'
+#!/usr/bin/env bash
+exit 0
+MOCK_FLOCK
+  chmod +x "$TMP/bin/flock"
+fi
+
 cat > "$TMP/backup.env" <<EOF_ENV
 SUPABASE_DIR=$TMP/supabase
 BACKUP_DIR=$TMP/backups
@@ -67,6 +75,7 @@ EOF_ENV
 
 export PATH="$TMP/bin:$PATH"
 export MOCK_DB_CONFIG="$TMP/mock-db-config"
+export TERMLY_MAINTENANCE_LOCK_FILE="$TMP/maintenance.lock"
 export TERMLY_BACKUP_ENV="$TMP/backup.env"
 "$ROOT/scripts/backup-school-hosted.sh" --label test
 

@@ -42,8 +42,10 @@ RELEASE_DIR="$(realpath "$RELEASE_DIR")"
 WEB_DIR="$(realpath "$WEB_DIR")"
 SUPABASE_DIR="$(realpath "$SUPABASE_DIR")"
 
-exec 9>/run/lock/termly-school-hosted-update.lock
-flock -n 9 || fail 'Another Termly update is already running.'
+MAINTENANCE_LOCK_FILE="${TERMLY_MAINTENANCE_LOCK_FILE:-/run/lock/termly-school-hosted-maintenance.lock}"
+install -d -m 0755 "$(dirname "$MAINTENANCE_LOCK_FILE")"
+exec 9>"$MAINTENANCE_LOCK_FILE"
+flock -n 9 || fail 'Another Termly backup, restore or update is running.'
 
 dc() { docker compose --env-file "$WEB_DIR/.env" -f "$WEB_DIR/compose.yml" "$@"; }
 sdc() { docker compose --env-file "$SUPABASE_DIR/.env" -f "$SUPABASE_DIR/docker-compose.yml" "$@"; }
@@ -93,7 +95,7 @@ if [[ -f "$STATUS_FILE" ]]; then cp -a "$STATUS_FILE" "$STATUS_FILE.pre-update-$
 STATUS_BACKUP="$STATUS_FILE.pre-update-$STAMP"
 
 # A verified Phase 3 cold backup is mandatory before any SQL or running-image change.
-TERMLY_BACKUP_ENV="$BACKUP_ENV" "$BACKUP_SCRIPT" --label "pre-update-$VERSION"
+TERMLY_BACKUP_ENV="$BACKUP_ENV" TERMLY_MAINTENANCE_LOCK_HELD=1 "$BACKUP_SCRIPT" --label "pre-update-$VERSION"
 
 # Track only release migrations. Existing historic migrations are not replayed.
 if [[ "$MIGRATION_COUNT" -gt 0 ]]; then
@@ -143,11 +145,11 @@ rollback_app() {
   echo '[Termly update] New app failed its health check. Restoring the previous web image...' >&2
   docker image tag "$PREVIOUS_ID" "$COMPOSE_IMAGE" || true
   cp -a "$STATUS_BACKUP" "$STATUS_FILE" 2>/dev/null || rm -f "$STATUS_FILE"
-  dc up -d --no-deps --force-recreate termly-web || true
+  dc up -d --no-build --no-deps --force-recreate termly-web || true
   echo "[Termly update] Previous app image restored from $PREVIOUS_ID. Database migrations are not automatically rolled back; use the Phase 3 recovery procedure only after review." >&2
 }
 
-if ! dc up -d --no-deps --force-recreate termly-web; then
+if ! dc up -d --no-build --no-deps --force-recreate termly-web; then
   rollback_app
   fail 'Compose could not start the new Termly web container.'
 fi

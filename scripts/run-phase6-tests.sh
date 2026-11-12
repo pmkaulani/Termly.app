@@ -4,6 +4,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 python3 -m unittest discover -s tests -p 'test_phase6_*.py' -v
+node --test tests/termly-remediation-regression.test.mjs
 bash -n scripts/install-school-hosted-monitor.sh
 python3 - <<'PY'
 from pathlib import Path

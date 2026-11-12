@@ -37,6 +37,14 @@ while (($#)); do
 done
 [[ -n "$BACKUP_FILE" ]] || { usage >&2; exit 2; }
 [[ -f "$BACKUP_FILE" ]] || { echo "Backup file not found: $BACKUP_FILE" >&2; exit 1; }
+
+if [[ "$MODE" == "apply" ]]; then
+  command -v flock >/dev/null 2>&1 || { echo 'flock is required for safe Termly maintenance coordination.' >&2; exit 1; }
+  MAINTENANCE_LOCK_FILE="${TERMLY_MAINTENANCE_LOCK_FILE:-/run/lock/termly-school-hosted-maintenance.lock}"
+  install -d -m 0755 "$(dirname "$MAINTENANCE_LOCK_FILE")"
+  exec 9>"$MAINTENANCE_LOCK_FILE"
+  flock -n 9 || { echo 'Another Termly backup, restore or update is running.' >&2; exit 1; }
+fi
 [[ -n "$AGE_IDENTITY_FILE" && -f "$AGE_IDENTITY_FILE" ]] || { echo 'Set AGE_IDENTITY_FILE to the private age identity file (keep it offline).' >&2; exit 1; }
 for cmd in age tar sha256sum; do command -v "$cmd" >/dev/null 2>&1 || { echo "Missing required command: $cmd" >&2; exit 1; }; done
 
@@ -125,7 +133,7 @@ read -r ANSWER
 [[ "$ANSWER" == "$CONFIRM" ]] || { echo 'Confirmation did not match; no changes made.'; exit 1; }
 
 # Make a second encrypted snapshot of the current installation before replacing it.
-"$SCRIPT_DIR/backup-school-hosted.sh" --label pre-restore
+TERMLY_MAINTENANCE_LOCK_HELD=1 "$SCRIPT_DIR/backup-school-hosted.sh" --label pre-restore
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 ROLLBACK_DIR="$BACKUP_DIR/restore-rollback-$STAMP"
@@ -167,6 +175,13 @@ tar --numeric-owner -xpf "$WORK/bundle/storage-data.tar.gz" -C "$SUPABASE_DIR/vo
 mkdir -p "$WORK/db-config"
 tar -xzf "$WORK/bundle/db-config.tar.gz" -C "$WORK/db-config"
 
+# Do not silently discard the optional external configuration archive. Stage
+# it beside the restore for explicit review rather than overwriting arbitrary
+# absolute host paths from an archive.
+mkdir -p "$ROLLBACK_DIR/recovered-extra-config"
+chmod 700 "$ROLLBACK_DIR/recovered-extra-config"
+tar -xzf "$WORK/bundle/extra-config.tar.gz" -C "$ROLLBACK_DIR/recovered-extra-config"
+
 cd "$SUPABASE_DIR"
 # Reset the retained named volume, create a stopped db container to attach it, then copy its snapshot.
 docker compose run --rm --no-deps --entrypoint /bin/sh db -c 'find /etc/postgresql-custom -mindepth 1 -maxdepth 1 -exec rm -rf {} +'
@@ -192,5 +207,12 @@ docker compose ps
 RESTORE_STARTED=0
 trap - ERR
 
-echo "[Termly restore] Database is healthy. Previous installation retained at: $ROLLBACK_DIR/previous-stack"
-echo '[Termly restore] Run the application acceptance checklist before deleting that rollback copy.'
+# The encrypted pre-restore archive is the retained rollback copy. Remove the
+# temporary plaintext previous stack and db-config staging after PostgreSQL
+# is confirmed healthy. Keep only the protected extra-config review directory.
+if [[ -d "$ROLLBACK_DIR/previous-stack" ]]; then rm -rf "$ROLLBACK_DIR/previous-stack"; fi
+if [[ -d "$ROLLBACK_DIR/db-config" ]]; then rm -rf "$ROLLBACK_DIR/db-config"; fi
+
+echo "[Termly restore] Database is healthy. Encrypted pre-restore backup retained in $BACKUP_DIR."
+echo "[Termly restore] External configuration staged for review at: $ROLLBACK_DIR/recovered-extra-config"
+echo '[Termly restore] Review and copy back only the configuration files required by this host, then run the application acceptance checklist.'

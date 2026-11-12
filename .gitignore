@@ -78,3 +78,5 @@ support-bundle-*
 *.age.sha256
 __pycache__/
 *.py[cod]
+termly-consolidated-remediation.zip
+termly-remediation-release/

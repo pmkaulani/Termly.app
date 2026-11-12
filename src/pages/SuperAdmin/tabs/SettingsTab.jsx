@@ -9,6 +9,7 @@ export default function SettingsTab({
   subEndDate, setSubEndDate,
   smsConfig, setSmsConfig,
   handleUpdateSetting,
+  loadData,
   setMessage,
   onWipeSchools,
 }) {

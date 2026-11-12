@@ -110,7 +110,7 @@ export default function Settings() {
         const authUser = await getCurrentAuthUser();
         if (authUser) {
           const userData = await getUserRole(authUser.id);
-          setIsAdmin(userData?.role === 'Admin');
+          setIsAdmin(['admin', 'owner'].includes(String(userData?.role || '').toLowerCase()));
         }
       }catch(e){console.error(e);}
     })();

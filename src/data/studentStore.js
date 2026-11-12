@@ -9,6 +9,7 @@ import { getFeeSummary, getPayments } from './financeStore';
 import { getCurrentPeriodDetails } from './academicsStore';
 import { TERM_FEE, CBC_STRUCTURE, getSubjectsForGrade } from './seedData';
 import { jsPDF } from 'jspdf';
+import { hasImportValue } from '../utils/importSafety.mjs';
 
 export function calculateInitialStudentFee(className, residenceType = 'day', profile = {}, termName = null) {
   const feeConfig = profile?.gradeFees?.[className];
@@ -88,6 +89,52 @@ export async function getStudents() {
   if (error) throw error;
   if (data) await db.students.bulkPut(data.map(s => ({ ...s, school_id: _currentSchoolId })));
   return (data || []).map(s => ({
+    ...s,
+    admNo: s.adm_no,
+    residenceType: s.residence_type || 'day',
+    house: s.house || null,
+    parentPhone: s.parent_phone,
+    joinDate: s.join_date,
+    birthCertNo: s.birth_cert_no,
+    fatherName: s.father_name,
+    fatherPhone: s.father_phone,
+    motherName: s.mother_name,
+    motherPhone: s.mother_phone,
+    nemisVerified: s.nemis_verified,
+    status: s.status || 'Active'
+  }));
+}
+
+/**
+ * Authoritative cloud read for import duplicate checks. Unlike getStudents(),
+ * this bypasses the offline-first cache and fetches every page before writes.
+ */
+export async function getStudentsFresh() {
+  if (!_currentSchoolId) return [];
+  const pageSize = 500;
+  const allRows = [];
+  for (let offset = 0; ; offset += pageSize) {
+    let query = supabase
+      .from('students')
+      .select('*')
+      .eq('school_id', _currentSchoolId)
+      .order('name');
+    if (typeof query?.range === 'function') {
+      query = query.range(offset, offset + pageSize - 1);
+    }
+    const { data, error } = await query;
+    if (error) throw error;
+    const page = data || [];
+    allRows.push(...page);
+    if (page.length < pageSize || typeof query?.range !== 'function') break;
+  }
+  try {
+    await db?.students?.bulkPut?.(allRows.map((student) => ({ ...student, school_id: _currentSchoolId })));
+  } catch (_) {
+    // Gracefully handle missing IndexedDB in test/unsupported environments
+  }
+  window.dispatchEvent(new Event('studentsSynced'));
+  return allRows.map((s) => ({
     ...s,
     admNo: s.adm_no,
     residenceType: s.residence_type || 'day',
@@ -401,7 +448,7 @@ export async function bulkImportStudents(studentsData, onProgress, options = {})
 
   const { duplicateAction = 'skip', createInitialFees = true, defaultStatus = 'Active' } = options; // 'skip' or 'update'
   const profile = await getSchoolProfile();
-  const existingStudents = await getStudents();
+  const existingStudents = await getStudentsFresh();
   const existingMap = new Map();
   existingStudents.forEach(s => {
     const adm = String(s.admNo || s.adm_no || '').trim().toLowerCase();
@@ -465,7 +512,27 @@ export async function bulkImportStudents(studentsData, onProgress, options = {})
     if (existingMap.has(lowerAdm)) {
       const existing = existingMap.get(lowerAdm);
       if (duplicateAction === 'update') {
-        toUpdate.push({ id: existing.id, ...record });
+        // Blank spreadsheet cells mean "not supplied", not "erase the
+        // existing school record". Update only values actually provided.
+        const update = { id: existing.id, _rowNumber: rowNum };
+        const add = (key, value, transform = (item) => item) => {
+          if (hasImportValue(value)) update[key] = transform(value);
+        };
+        add('name', s.name, (value) => String(value).trim());
+        const incomingClass = s.class || s.class_grade;
+        add('class', incomingClass, (value) => String(value).trim());
+        if (hasImportValue(incomingClass)) update.subjects = getSubjectsForGrade(String(incomingClass).trim(), profile);
+        add('stream', s.stream);
+        add('gender', s.gender);
+        add('dob', s.dob);
+        add('parent', s.parent || s.parentName);
+        add('parent_phone', s.parentPhone || s.parent_phone);
+        add('parent_email', s.parentEmail || s.parent_email);
+        add('residence_type', s.residence || s.residenceType);
+        add('photo_path', s.photo_path);
+        add('status', s.status);
+        if (Array.isArray(s.subjects) && s.subjects.length > 0) update.subjects = s.subjects;
+        toUpdate.push(update);
       } else {
         skippedCount++;
       }
